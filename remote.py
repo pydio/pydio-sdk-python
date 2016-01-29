@@ -19,14 +19,7 @@
 #  The latest code can be found at <http://pyd.io/>.
 #
 
-# Dis file iz Python3, maybe
-import sys
-if sys.version_info[0] < 3:
-    print("Error!! Meant to be used with Python 3+")
-    exit(-1)
-
-import urllib.request, urllib.parse, urllib.error
-from urllib.parse import urlparse
+import urllib
 import json
 import hmac
 import random
@@ -34,30 +27,26 @@ import unicodedata
 import platform
 from hashlib import sha256
 from hashlib import sha1
+from urlparse import urlparse
+
+import math
 from requests.exceptions import ConnectionError, RequestException
 import keyring
 from keyring.errors import PasswordSetError
 import xml.etree.ElementTree as ET
-import requests
-from .exceptions import PydioSdkException, PydioSdkBasicAuthException, PydioSdkTokenAuthException, \
-    PydioSdkQuotaException, PydioSdkPermissionException, PydioSdkTokenAuthNotSupportedException
+
+from exceptions import PydioSdkException, PydioSdkBasicAuthException, PydioSdkTokenAuthException, \
+    PydioSdkQuotaException, PydioSdkPermissionException, PydioSdkTokenAuthNotSupportedException, PydioSdkDefaultException
 from .utils import *
-try:
-    from pydio.utils import i18n
-    _ = i18n.language.ugettext
-except:
-    _ = str
+
+
+def _(message):
+    return message
 
 PYDIO_SDK_MAX_UPLOAD_PIECES = 40 * 1024 * 1024
 
+
 class PydioSdk():
-    
-    def hashfile(afile, hasher, blocksize=65536):
-        buf = afile.read(blocksize)
-        while len(buf) > 0:
-            hasher.update(buf)
-            buf = afile.read(blocksize)
-        return hasher.hexdigest()
 
     def __init__(self, url='', ws_id='', remote_folder='', user_id='', auth=(), device_id='python_client',
                  skip_ssl_verify=False, proxies=None, timeout=20):
@@ -66,6 +55,7 @@ class PydioSdk():
         self.verify_ssl = not skip_ssl_verify
         if self.verify_ssl and "REQUESTS_CA_BUNDLE" in os.environ:
             self.verify_ssl = os.environ["REQUESTS_CA_BUNDLE"]
+
 
         self.base_url = url.rstrip('/') + '/api/'
         self.url = url.rstrip('/') + '/api/' + ws_id
@@ -119,7 +109,7 @@ class PydioSdk():
                 unicode_path = test
             except ValueError as e:
                 pass
-        return urllib.request.pathname2url(unicode_path.encode('utf-8'))
+        return urllib.pathname2url(unicode_path.encode('utf-8'))
 
     def normalize(self, unicode_path):
         if platform.system() == 'Darwin':
@@ -144,13 +134,13 @@ class PydioSdk():
     def set_tokens(self, tokens):
         self.tokens = tokens
         try:
-            keyring.set_password(self.base_url, self.user_id + '-token', tokens['t'] + ':' + tokens['p'])
+            keyring.set_password(self.url, self.user_id + '-token', tokens['t'] + ':' + tokens['p'])
         except PasswordSetError:
             logging.error(_("Cannot store tokens in keychain, there might be an OS permission issue!"))
 
     def get_tokens(self):
         if not self.tokens:
-            k_tok = keyring.get_password(self.base_url, self.user_id + '-token')
+            k_tok = keyring.get_password(self.url, self.user_id + '-token')
             if k_tok:
                 parts = k_tok.split(':')
                 self.tokens = {'t': parts[0], 'p': parts[1]}
@@ -173,9 +163,9 @@ class PydioSdk():
             raise PydioSdkTokenAuthNotSupportedException("token_auth")
 
         try:
-            tokens = json.loads(resp.content.decode("utf-8"))
+            tokens = json.loads(resp.content)
         except ValueError as v:
-            raise PydioSdkException("basic_auth", "", "Cannot parse JSON result: " + str(resp.content) + "")
+            raise PydioSdkException("basic_auth", "", "Cannot parse JSON result: " + resp.content + "")
             #return False
 
         self.set_tokens(tokens)
@@ -226,6 +216,7 @@ class PydioSdk():
     def perform_with_tokens(self, token, private, url, request_type='get', data=None, files=None, headers=None, stream=False,
                             with_progress=False):
         """
+
         :param headers:
         :param token: str the token.
         :param private: str private key associated to token
@@ -237,10 +228,10 @@ class PydioSdk():
         :param with_progress: dict an object that can be updated with various progress data
         :return: Http response
         """
-        nonce = sha1(str(random.random()).encode("utf-8")).hexdigest()
+        nonce = sha1(str(random.random())).hexdigest()
         uri = urlparse(url).path.rstrip('/')
         msg = uri + ':' + nonce + ':' + private
-        the_hash = hmac.new(bytes(token.encode("utf-8")), msg.encode("utf-8"), sha256)
+        the_hash = hmac.new(str(token), str(msg), sha256)
         auth_hash = nonce + ':' + the_hash.hexdigest()
 
         if request_type == 'get':
@@ -254,6 +245,7 @@ class PydioSdk():
                                     headers=headers, proxies=self.proxies)
             except ConnectionError as e:
                 raise
+
         elif request_type == 'post':
             if not data:
                 data = {}
@@ -326,7 +318,7 @@ class PydioSdk():
                 except PydioSdkTokenAuthNotSupportedException:
                     self.stick_to_basic = True
                     logging.info('Switching to permanent basic auth, as tokens were not correctly received. This is not '
-                        'good for performances, but might be necessary for session credential based setups.')
+                                 'good for performances, but might be necessary for session credential based setups.')
                     return self.perform_basic(url, request_type=type, data=data, files=files, headers=headers, stream=stream,
                                               with_progress=with_progress)
 
@@ -359,7 +351,7 @@ class PydioSdk():
         except requests.exceptions.ConnectionError:
             raise
         try:
-            return json.loads(resp.content.decode("utf-8"))
+            return json.loads(resp.content)
         except ValueError as v:
             raise Exception(_("Invalid JSON value received while getting remote changes. Is the server correctly configured?"))
 
@@ -448,13 +440,13 @@ class PydioSdk():
                 return data
             else:
                 return False
-        except requests.exceptions.ConnectionError as ce:
-            logging.error("Connection Error " + str(ce))
+        except requests.exceptions.ConnectionError:
+            raise
         except requests.exceptions.Timeout:
-            logging.error("Timeout Error " + str(ce))
-        except Exception as ex:
+            raise
+        except Exception, ex:
             logging.warning("Stat failed", exc_info=ex)
-        return False
+            return False
 
     def bulk_stat(self, pathes, result=None, with_hash=False):
         """
@@ -472,13 +464,14 @@ class PydioSdk():
 
         from requests.exceptions import Timeout
         # NORMALIZE PATHES FROM START
-        pathes = [self.normalize(p) for p in pathes]
+        pathes = map(lambda p: self.normalize(p), pathes)
 
         action = '/stat_hash' if with_hash else '/stat'
         data = dict()
         maxlen = min(len(pathes), self.stat_slice_number)
-        clean_pathes = [self.remote_folder + t.replace('\\', '/') for t in [x for x in pathes[:maxlen] if x != '']]
-        data['nodes[]'] = [self.normalize(p) for p in clean_pathes]
+        clean_pathes = map(lambda t: self.remote_folder + t.replace('\\', '/'),
+                           filter(lambda x: x != '', pathes[:maxlen]))
+        data['nodes[]'] = map(lambda p: self.normalize(p), clean_pathes)
         url = self.url + action + self.urlencode_normalized(clean_pathes[0])
         try:
             resp = self.perform_request(url, type='post', data=data)
@@ -504,7 +497,7 @@ class PydioSdk():
             replaced = result
         else:
             replaced = dict()
-        for (p, stat) in list(data.items()):
+        for (p, stat) in data.items():
             if self.remote_folder:
                 p = p[len(self.remote_folder):]
                 #replaced[os.path.normpath(p)] = stat
@@ -552,7 +545,7 @@ class PydioSdk():
         """
         data = dict()
         data['ignore_exists'] = 'true'
-        data['nodes[]'] = [self.normalize(self.remote_folder + t) for t in [x for x in pathes if x != '']]
+        data['nodes[]'] = map(lambda t: self.normalize(self.remote_folder + t), filter(lambda x: x != '', pathes))
         url = self.url + '/mkdir' + self.urlencode_normalized(self.remote_folder + pathes[0])
         resp = self.perform_request(url=url, type='post', data=data)
         self.is_pydio_error_response(resp)
@@ -647,7 +640,7 @@ class PydioSdk():
                         else:
                             for prop in properties:
                                 server_data[prop['@name']] = prop['$']
-        except (KeyError, ValueError):
+        except KeyError, ValueError:
             pass
         return server_data
 
@@ -703,13 +696,10 @@ class PydioSdk():
             else:
                 raise e
         except RequestException as ce:
-            raise PydioSdkException("upload", str(path), 'RequestException: ' + str(ce.message))
+            raise PydioSdkException("upload", path, 'RequestException: ' + ce.message)
 
         new = self.stat(path)
         if not new or not (new['size'] == local_stat['size']):
-            beginning_filename = path.rfind('/')
-            if beginning_filename > -1 and path[beginning_filename+1] == " ":
-                raise PydioSdkException('upload', path, _("File beginning with a 'space' shouldn't be uploaded"))
             raise PydioSdkException('upload', path, _('File is incorrect after upload'))
         return True
 
@@ -742,12 +732,6 @@ class PydioSdk():
                 headers = {'range':'bytes=%i-%i' % (current_size, chunk_remote_stat['size'])}
                 write_mode = 'a+'
                 dl = current_size
-                if callback_dict:
-                    callback_dict['bytes_sent'] = float(current_size)
-                    callback_dict['total_bytes_sent'] = float(current_size)
-                    callback_dict['total_size'] = float(chunk_remote_stat['size'])
-                    callback_dict['transfer_rate'] = 0
-                    dispatcher.send(signal=TRANSFER_CALLBACK_SIGNAL, send=self, change=callback_dict)
 
             else:
                 os.unlink(local_tmp)
@@ -770,13 +754,6 @@ class PydioSdk():
                         if done != previous_done:
                             transfer_rate = dl // (time.clock() - start)
                             logging.debug("\r[%s%s] %s bps" % ('=' * done, ' ' * (50 - done), transfer_rate))
-                            dispatcher.send(signal=TRANSFER_RATE_SIGNAL, send=self, transfer_rate=transfer_rate)
-                            if callback_dict:
-                                callback_dict['bytes_sent'] = float(len(chunk))
-                                callback_dict['total_bytes_sent'] = float(dl)
-                                callback_dict['total_size'] = float(total_length)
-                                callback_dict['transfer_rate'] = transfer_rate
-                                dispatcher.send(signal=TRANSFER_CALLBACK_SIGNAL, send=self, change=callback_dict)
 
                         previous_done = done
             if not os.path.exists(local_tmp):
@@ -810,6 +787,7 @@ class PydioSdk():
         url = self.url + '/ls' + self.urlencode_normalized(self.remote_folder)
         data = dict()
         if dir and dir is not '/':
+            #data['dir'] = dir
             url += self.urlencode_normalized(dir)
         if nodes:
             data['nodes'] = nodes
@@ -836,7 +814,7 @@ class PydioSdk():
             if tree.get('ajxp_mime') == 'ajxp_folder' or tree.get('ajxp_mime') == 'ajxp_browsable_archive':
                 for subtree in tree.findall('tree'):
                     queue.append(subtree)
-            path = self.normalize(str(tree.get('filename')))
+            path = self.normalize(unicode(tree.get('filename')))
             bytesize = tree.get('bytesize')
             dict_tree = dict(tree.items())
             if path:
@@ -930,37 +908,33 @@ class PydioSdk():
         :param max_size: upload max size
         :return: response of the last requests if there were many of them
         """
-        if with_progress:
-            def cb(size=0, progress=0, delta=0, rate=0):
-                with_progress['total_size'] = size
-                with_progress['bytes_sent'] = delta
-                with_progress['total_bytes_sent'] = progress
-                dispatcher.send(signal=TRANSFER_CALLBACK_SIGNAL, sender=self, change=with_progress)
-        else:
-            def cb(size=0, progress=0, delta=0, rate=0):
-                logging.debug('Current transfer rate ' + str(rate))
+        def cb(size=0, progress=0, delta=0, rate=0):
+            logging.debug('Current transfer rate ' + str(rate))
 
         def parse_upload_rep(http_response):
             if http_response.headers.get('content-type') != 'application/octet-stream':
-                if str(http_response.text).count('message type="ERROR"'):
-                    if str(http_response.text).lower().count("(507)"):
+                if unicode(http_response.text).count('message type="ERROR"'):
+
+                    if unicode(http_response.text).lower().count("(507)"):
                         raise PydioSdkDefaultException('507')
 
-                    if str(http_response.text).lower().count("(412)"):
+                    if unicode(http_response.text).lower().count("(412)"):
                         raise PydioSdkDefaultException('412')
+
                     import re
                     # Remove XML tags
-                    text = re.sub('<[^<]+>', '', str(http_response.text))
+                    text = re.sub('<[^<]+>', '', unicode(http_response.text))
                     raise PydioSdkDefaultException(text)
 
-                if str(http_response.text).lower().count("(507)"):
+                if unicode(http_response.text).lower().count("(507)"):
                     raise PydioSdkDefaultException('507')
 
-                if str(http_response.text).lower().count("(412)"):
+                if unicode(http_response.text).lower().count("(412)"):
                     raise PydioSdkDefaultException('412')
 
-                if str(http_response.text).lower().count("(410)") or str(http_response.text).lower().count("(411)"):
-                    raise PydioSdkDefaultException(str(http_response.text))
+                if unicode(http_response.text).lower().count("(410)") or unicode(http_response.text).lower().count("(411)"):
+                    raise PydioSdkDefaultException(unicode(http_response.text))
+
 
 
         filesize = os.stat(files['userfile_0']).st_size
@@ -1048,39 +1022,25 @@ class PydioSdk():
         return resp
 
     def check_share_link(self, file_name):
-        """ Check if a share link exists for a given item (filename)
-
-        :param file_name: the item name
-        :return: response string from the server, it'll return the a link if share link already exists for the given item
-        """
         data = dict()
+        #data["action"] = "load_shared_element_data"
+        #data["file"] = file_name
+        #data["element_type"] = 'file'
+
         resp = requests.post(
-            url=self.url + "/load_shared_element_data" + self.urlencode_normalized(file_name),
-            data=data,
-            timeout=self.timeout,
-            verify=self.verify_ssl,
-            auth=self.auth,
-            proxies=self.proxies)
+                    url=self.url + "/load_shared_element_data" + self.urlencode_normalized(file_name),
+                    data=data,
+                    timeout=self.timeout,
+                    verify=self.verify_ssl,
+                    auth=self.auth,
+                    proxies=self.proxies)
 
         return resp.content
 
     def share(self, ws_label, ws_description, password, expiration, downloads, can_read, can_download, paths,
-              link_handler, can_write):
-        """ Send the share request for an item (file or folder) to the server and gets the response from the server
-
-        :param ws_label: alias of the workspace/ workspace id
-        :param ws_description: The description of the workspace
-        :param password: if the share has to be protected by password, should be mentioned
-        :param expiration: The share link expires after how many days
-        :param downloads: Number of downloads allowed on the shared link
-        :param can_read: boolean value - person with link can read?
-        :param can_download: boolean value - person with link can download?
-        :param paths: the relative path of the file to be shared
-        :param link_handler: Can create a custom link by specifying the custom name in this field
-        :param can_write: boolean value - person with link can modify?
-        :return: response string from the server, it'll return the a share link if all the parameters are correct
-        """
+                    link_handler, can_write):
         data = dict()
+        #data["get_action"] = "share"
         data["sub_action"] = "create_minisite"
         data["guest_user_pass"] = password
         data["create_guest_user"] = "true"
@@ -1089,40 +1049,88 @@ class PydioSdk():
         data["downloadlimit"] = downloads
         data["repo_description"] = ws_description
         data["repo_label"] = ws_label
+        #data["nodes[]"] = paths
         data["custom_handle"] = link_handler
+        #data["file"] = paths
+        #data["dir"] = os.path.dirname(paths)
 
         if can_download == "true":
             data["simple_right_download"] = "on"
         if can_read == "true":
             data["simple_right_read"] = "on"
-        else:
-            data["minisite_layout"] = "ajxp_unique_dl"
         if can_write == "true":
             data["simple_right_write"] = "on"
-        #logging.info("URL : " + self.url + '/share/public' + self.urlencode_normalized(paths) + "\nDATA " + str(data))
+
         resp = requests.post(
-            url=self.url + '/share/public' + self.urlencode_normalized(paths),
-            data=data,
-            timeout=self.timeout,
-            verify=self.verify_ssl,
-            auth=self.auth,
-            proxies=self.proxies)
+                    url=self.url+'/share/public' + self.urlencode_normalized(paths),
+                    data=data,
+                    timeout=self.timeout,
+                    verify=self.verify_ssl,
+                    auth=self.auth,
+                    proxies=self.proxies)
         return resp.content
 
 
     def unshare(self, path):
-        """ Sends un-share request for the specified item and returns the server response
-
-        :param path: The path of the item to be shared
-        :return: On success returns empty string, when the response status is not 200 returns the corresponding error message
-        """
         data = dict()
+        #data["file"] = path
+
         resp = requests.post(
-            url=self.url + '/unshare' + self.urlencode_normalized(path),
-            data=data,
+                    url=self.url+'/unshare' + self.urlencode_normalized(path),
+                    data=data,
+                    timeout=self.timeout,
+                    verify=self.verify_ssl,
+                    auth=self.auth,
+                    proxies=self.proxies)
+
+        return resp.content
+
+    def install(self, json_form_data):
+
+        session_access = self.base_url.replace('/api/', '/')
+        print "Installing server " + session_access
+        s = requests.Session()
+        # Make sure we go through the bootSequence to create RootGroup
+        s.get(
+            url=session_access,
             timeout=self.timeout,
             verify=self.verify_ssl,
-            auth=self.auth,
-            proxies=self.proxies)
+            proxies=self.proxies,
+            headers={'Accept': 'text/html'}
+        )
+        s.get(
+            url=session_access + '/?ignore_tests=true',
+            timeout=self.timeout,
+            verify=self.verify_ssl,
+            proxies=self.proxies,
+            headers={'Accept': 'text/html'}
+        )
 
+        # Cannot use REST, Get Token First
+        resp1 = s.get(
+            url=session_access + '/?get_action=get_boot_conf',
+            timeout=self.timeout,
+            verify=self.verify_ssl,
+            proxies=self.proxies
+        )
+        resp_json = json.loads(resp1.content)
+        token = resp_json['SECURE_TOKEN']
+
+        print "Retrieved Secure Token : " + token
+
+        # Now Apply Installer Form
+        json_form_data['db_type'] = json.dumps(json_form_data['db_type'])
+        json_form_data['MAILER_ENABLE'] = json.dumps(json_form_data['MAILER_ENABLE'])
+        import time
+        json_form_data['APPLICATION_WELCOME'] += ' - ' + time.strftime("%Y-%m-%d %H:%M")
+
+        resp = s.post(
+            url= session_access + '/?secure_token='+token+'&get_action=apply_installer_form',
+            data=json_form_data,
+            timeout=self.timeout,
+            verify=self.verify_ssl,
+            proxies=self.proxies
+        )
+
+        print "Submitted install form with response : " + resp.content
         return resp.content

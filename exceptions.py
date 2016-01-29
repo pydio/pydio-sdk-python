@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-#
 #  Copyright 2007-2016 Charles du Jeu - Abstrium SAS <team (at) pyd.io>
 #  This file is part of Pydio.
 #
@@ -19,11 +18,8 @@
 #  The latest code can be found at <http://pyd.io/>.
 #
 
-try:
-    from pydio.utils import i18n
-    _ = i18n.language.ugettext
-except:
-    _ = str
+def _(message):
+    return message
 
 class ProcessException(Exception):
     def __init__(self, src, operation, path, detail):

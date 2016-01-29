@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
 #
-#  Copyright 2007-2016 Charles du Jeu - Abstrium SAS <team (at) pyd.io>
+#  Copyright 2007-2014 Charles du Jeu - Abstrium SAS <team (at) pyd.io>
 #  This file is part of Pydio.
 #
 #  Pydio is free software: you can redistribute it and/or modify
@@ -24,24 +23,13 @@ import requests
 import time
 import os
 import sys
-import math
 import hashlib
 
 from io import BytesIO, FileIO
-from pydispatch import dispatcher
 from six import b
-from .exceptions import PydioSdkDefaultException
+# -*- coding: utf-8 -*-
+from exceptions import PydioSdkDefaultException
 
-try: # Check wether the SDK in inside PydioSync or Standalone and patch thyself
-    from pydio.utils import i18n
-    _ = i18n.language.ugettext
-except:
-    _ = str
-try:
-    TRANSFER_RATE_SIGNAL
-except NameError:
-    TRANSFER_RATE_SIGNAL = 'transfer_rate'
-    TRANSFER_CALLBACK_SIGNAL = 'transfer_callback'
 
 class BytesIOWithFile(BytesIO):
 
@@ -132,8 +120,7 @@ class BytesIOWithFile(BytesIO):
             try:
                 self.callback(self.full_length, self.cursor + (self.file_part)*self.chunk_size, len(chunk), transfer_rate)
             except Exception as e:
-                logging.warning(_('Buffered reader callback error'))
-        dispatcher.send(signal=TRANSFER_RATE_SIGNAL, transfer_rate=transfer_rate, sender=self._signal_sender)
+                logging.warning('Buffered reader callback error')
         #duration = time.time() - before
         #if duration > 0 :
             #logging.info('Read 8kb of data in %'+str(duration))
@@ -185,3 +172,10 @@ def file_start_hash_match(local_file, size, remote_hash):
             md5.update(data)
     return remote_hash == md5.hexdigest()
 
+
+def hashfile(afile, hasher, blocksize=65536):
+    buf = afile.read(blocksize)
+    while len(buf) > 0:
+        hasher.update(buf)
+        buf = afile.read(blocksize)
+    return hasher.hexdigest()
