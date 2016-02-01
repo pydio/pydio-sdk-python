@@ -6,7 +6,7 @@ Python SDK to communicate with Pydio backend.
 Installation instructions
 =========================
 
-    git submodule add git@git@gtihub.com:pydio/pydio-sdk-python pydiosdkpython
+    git submodule add git@github.com:pydio/pydio-sdk-python pydiosdkpython
     git submodule init
     git submodule update
     virtualenv pydio --python=python3
@@ -20,7 +20,7 @@ Example usage
          import json
          PASSWORD = "pydiopassword"
          job = "server.my-files"
-         configs_path = "path/to/configs.json" # PydioSync > About > Open Pydio Logs
+         configs_path = "path/to/configs.json"  # PydioSync > About > Open Pydio Logs
          with open(configs_path) as conf_handler:
              conf = json.load(conf_handler)
          sdk = PydioSdk(conf[job]['server'], conf[job]['workspace'], conf[job]['remote_folder'], '', auth=(conf[job]['user'], PASSWORD))
