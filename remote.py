@@ -85,6 +85,9 @@ class PydioSdk():
         self.proxies = proxies
         self.timeout = timeout
 
+    def log(self, mess):
+        logging.info("[SDK] @" + self.ws_id + " " + mess)
+
     def set_server_configs(self, configs):
         """
         Server specific capacities and limitations, provided by the server itself
@@ -175,6 +178,7 @@ class PydioSdk():
         try:
             tokens = json.loads(resp.content.decode("utf-8"))
         except ValueError as v:
+            logging.debug("Basic auth error " + str(v.message))
             raise PydioSdkException("basic_auth", "", "Cannot parse JSON result: " + str(resp.content) + "")
             #return False
 
@@ -304,7 +308,7 @@ class PydioSdk():
             try:
                 tokens = self.basic_authenticate()
             except PydioSdkTokenAuthNotSupportedException as pne:
-                logging.info('Switching to permanent basic auth, as tokens were not correctly received. This is not '
+                self.log('Switching to permanent basic auth, as tokens were not correctly received. This is not '
                              'good for performances, but might be necessary for session credential based setups.')
                 self.stick_to_basic = True
                 return self.perform_basic(url, request_type=type, data=data, files=files, headers=headers, stream=stream,
@@ -325,7 +329,7 @@ class PydioSdk():
                     tokens = self.basic_authenticate()
                 except PydioSdkTokenAuthNotSupportedException:
                     self.stick_to_basic = True
-                    logging.info('Switching to permanent basic auth, as tokens were not correctly received. This is not '
+                    self.log('Switching to permanent basic auth, as tokens were not correctly received. This is not '
                         'good for performances, but might be necessary for session credential based setups.')
                     return self.perform_basic(url, request_type=type, data=data, files=files, headers=headers, stream=stream,
                                               with_progress=with_progress)
@@ -440,7 +444,10 @@ class PydioSdk():
             try:
                 data = json.loads(resp.content)
             except ValueError as ve:
+                self.log("Stat request " + url + ", produced an error." + str(ve.message) + "(local path: " + path + ")")
                 return False
+            if data == {}:
+                self.log("Stat request " + url + ", produced no output. (local path: " + path + ")")
             logging.debug("data: %s" % data)
             if not data:
                 return False
@@ -449,9 +456,9 @@ class PydioSdk():
             else:
                 return False
         except requests.exceptions.ConnectionError as ce:
-            logging.error("Connection Error " + str(ce))
+            logging.error("Connection Error " + ce.message)
         except requests.exceptions.Timeout as ce:
-            logging.error("Timeout Error " + str(ce))
+            logging.error("Timeout Error " + ce.message)
         except Exception as ex:
             logging.warning("Stat failed", exc_info=ex)
         return False
@@ -486,7 +493,7 @@ class PydioSdk():
             if self.stat_slice_number < 20:
                 raise
             self.stat_slice_number = int(math.floor(self.stat_slice_number / 2))
-            logging.info('Reduce bulk stat slice number to %d', self.stat_slice_number)
+            self.log('Reduce bulk stat slice number to %d', self.stat_slice_number)
             return self.bulk_stat(pathes, result=result, with_hash=with_hash)
 
         try:
@@ -526,7 +533,7 @@ class PydioSdk():
                 pathes.remove(p4)
             else:
                 #pass
-                logging.info('Fatal charset error, cannot find files (%s, %s, %s, %s) in %s' % (repr(p1), repr(p2), repr(p3), repr(p4), repr(pathes),))
+                self.log('Fatal charset error, cannot find files (%s, %s, %s, %s) in %s' % (repr(p1), repr(p2), repr(p3), repr(p4), repr(pathes),))
                 raise PydioSdkException('bulk_stat', p1, "Encoding problem, failed emptying bulk_stat, "
                                                          "exiting to avoid infinite loop")
         if len(pathes):
@@ -889,6 +896,7 @@ class PydioSdk():
             error = str(element.get('type')).lower() == 'error'
             message = element[0].text
         except Exception as e:
+            logging.debug("[remote sdk] pydio_error, ignoring " + str(e.message))
             pass
         if error:
             raise PydioSdkDefaultException(message)
@@ -980,7 +988,7 @@ class PydioSdk():
                 existing_dlpart_size = existing_dlpart['size']
                 if filesize > existing_dlpart_size and \
                         file_start_hash_match(files['userfile_0'], existing_dlpart_size, existing_dlpart['hash']):
-                    logging.info('Found the beggining of this file on the other file, skipping the first pieces')
+                    self.log('Found the beggining of this file on the other file, skipping the first pieces')
                     existing_pieces_number = existing_dlpart_size / max_size
                     cb(filesize, existing_dlpart_size, existing_dlpart_size, 0)
 
@@ -1043,7 +1051,7 @@ class PydioSdk():
                     return resp
 
                 duration = time.time() - before
-                logging.info('Uploaded '+str(max_size)+' bytes of data in about %'+str(duration)+' s')
+                self.log('Uploaded '+str(max_size)+' bytes of data in about %'+str(duration)+' s')
 
         return resp
 
@@ -1099,7 +1107,7 @@ class PydioSdk():
             data["minisite_layout"] = "ajxp_unique_dl"
         if can_write == "true":
             data["simple_right_write"] = "on"
-        #logging.info("URL : " + self.url + '/share/public' + self.urlencode_normalized(paths) + "\nDATA " + str(data))
+        #self.log("URL : " + self.url + '/share/public' + self.urlencode_normalized(paths) + "\nDATA " + str(data))
         resp = requests.post(
             url=self.url + '/share/public' + self.urlencode_normalized(paths),
             data=data,
