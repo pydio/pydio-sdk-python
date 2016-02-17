@@ -896,7 +896,7 @@ class PydioSdk():
             error = str(element.get('type')).lower() == 'error'
             message = element[0].text
         except Exception as e:
-            logging.debug("[remote sdk] pydio_error, ignoring " + str(e.message))
+            logging.debug("[remote sdk] pydio_error, ignoring " + str(e))
             pass
         if error:
             raise PydioSdkDefaultException(message)
