@@ -3,7 +3,9 @@ pydio-sdk-python
 
 Python SDK to communicate with Pydio backend. 
 
-The master branch in Python 3 should be up to date and documented. The Python 2 branch exists for backward compatibility and transition.
+We currently use the Python 2 branch.
+
+(The master branch in Python 3 should be up to date and documented. The Python 2 branch exists for backward compatibility and transition.)
 
 Installation instructions
 =========================
@@ -21,8 +23,7 @@ Example usage
 
 ```python
 from pydiosdkpython.remote import PydioSdk
-with open(configs_path) as conf_handler:
-    conf = json.load(conf_handler)
-sdk = PydioSdk("localhost", "my-files", "/", '', auth=('user', 'password'))
+
+sdk = PydioSdk("http(s)://localhost/pydio", "my-files", "/", '', auth=('user', 'password'))
 print(sdk.list())
 ```
