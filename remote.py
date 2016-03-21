@@ -38,9 +38,13 @@ import xml.etree.ElementTree as ET
 from exceptions import PydioSdkException, PydioSdkBasicAuthException, PydioSdkTokenAuthException, \
     PydioSdkQuotaException, PydioSdkPermissionException, PydioSdkTokenAuthNotSupportedException, PydioSdkDefaultException
 from .utils import *
-
+""" For request debugging
+from httplib import HTTPConnection
+HTTPConnection.debuglevel = 1
+"""
 
 def _(message):
+    """ Fake i18n patch """
     return message
 
 PYDIO_SDK_MAX_UPLOAD_PIECES = 40 * 1024 * 1024
@@ -1132,3 +1136,4 @@ class PydioSdk():
 
         print "Submitted install form with response : " + resp.content
         return resp.content
+
