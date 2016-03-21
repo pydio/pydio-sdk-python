@@ -1,7 +1,7 @@
 pydio-sdk-python
 ================
 
-Python SDK to communicate with Pydio backend.
+Python 2 SDK to communicate with Pydio backend.
 
 Installation instructions
 =========================
@@ -29,19 +29,14 @@ Python 3
 Example usage
 =============
 
+List the file in *My Files*
+---------------------------
+
 ```python
- from pydiosdkpython.remote import PydioSdk
- import json
- PASSWORD = "pydiopassword"
- job = "server.my-files"
- configs_path = "path/to/configs.json" # PydioSync > About > Open Pydio Logs
- with open(configs_path) as conf_handler:
-     conf = json.load(conf_handler)
- sdk = PydioSdk(conf[job]['server'], conf[job]['workspace'], conf[job]['remote_folder'], '', auth=(conf[job]['user'], PASSWORD))
- try: 
-   print(sdk.list())
- except requests.exceptions.SSLError:
-   sdk = PydioSdk(conf[job]['server'], conf[job]['workspace'], conf[job]['remote_folder'], '', auth=(conf[job]['user'], PASSWORD), skip_ssl_verify=True)
-   print(sdk.list())
+from pydiosdkpython.remote import PydioSdk
+import json
+
+sdk = PydioSdk("http(s)://localhost/pydio", "my-files", "/", '', auth=('user', 'password'))
+print(sdk.list())
 ```
 
