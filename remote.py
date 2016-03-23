@@ -45,7 +45,7 @@ logging.getLogger().setLevel(logging.DEBUG)
 requests_log = logging.getLogger("requests.packages.urllib3")
 requests_log.setLevel(logging.DEBUG)
 requests_log.propagate = True
-"""
+#"""
 
 def _(message):
     """ Fake i18n patch """
@@ -1089,6 +1089,28 @@ class PydioSdk():
                     verify=self.verify_ssl,
                     auth=self.auth,
                     proxies=self.proxies)
+        return resp.content
+
+    def copy(self, files_to_copy, dest_folder):
+        """ Copy a file or a list of files to dest_folder
+            :param files_to_copy: full path origin file or list of full path origin files
+            :param dest_folder: full path destination file or folder
+        """
+        url = self.url + '/copy/'
+        data = dict()
+        data["dest"] = dest_folder
+        if isinstance(files_to_copy, str) or isinstance(files_to_copy, unicode):
+            data["nodes[]"] = files_to_copy
+        elif isintance(files_to_copy, list):
+            i = 0
+            for filepath in files_to_copy:
+                data["node[" + str(i) + "]"] = filepath
+                i += 1
+        else:
+            logging.info("Couldn't understand input files_to_copy " + str(files_to_copy))
+        resp = self.perform_request(url, type='post', data=data)
+        #logging.info(resp.content)
+        self.is_pydio_error_response(resp)
         return resp.content
 
 
