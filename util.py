@@ -1,5 +1,5 @@
-#
-#  Copyright 2007-2014 Charles du Jeu - Abstrium SAS <team (at) pyd.io>
+# -*- coding: utf-8 -*-
+#  Copyright 2007-2016 Charles du Jeu - Abstrium SAS <team (at) pyd.io>
 #  This file is part of Pydio.
 #
 #  Pydio is free software: you can redistribute it and/or modify
@@ -15,7 +15,7 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Pydio.  If not, see <http://www.gnu.org/licenses/>.
 #
-#  The latest code can be found at <http://pyd.io/>.
+#  The latest code can be found at <http://pydio.com/>.
 #
 
 import logging
@@ -24,11 +24,14 @@ import time
 import os
 import sys
 import hashlib
-
 from io import BytesIO, FileIO
 from six import b
-# -*- coding: utf-8 -*-
-from exceptions import PydioSdkDefaultException
+from pydispatch import dispatcher
+try:
+    from pydio import TRANSFER_RATE_SIGNAL, TRANSFER_CALLBACK_SIGNAL
+except ImportError:
+    TRANSFER_RATE_SIGNAL = 'transfer_rate'
+    TRANSFER_CALLBACK_SIGNAL = 'transfer_callback'
 
 
 class BytesIOWithFile(BytesIO):
@@ -120,7 +123,9 @@ class BytesIOWithFile(BytesIO):
             try:
                 self.callback(self.full_length, self.cursor + (self.file_part)*self.chunk_size, len(chunk), transfer_rate)
             except Exception as e:
+                logging.exception(e)
                 logging.warning('Buffered reader callback error')
+        dispatcher.send(signal=TRANSFER_RATE_SIGNAL, transfer_rate=transfer_rate, sender=self._signal_sender)
         #duration = time.time() - before
         #if duration > 0 :
             #logging.info('Read 8kb of data in %'+str(duration))
@@ -172,10 +177,12 @@ def file_start_hash_match(local_file, size, remote_hash):
             md5.update(data)
     return remote_hash == md5.hexdigest()
 
-
-def hashfile(afile, hasher, blocksize=65536):
-    buf = afile.read(blocksize)
-    while len(buf) > 0:
-        hasher.update(buf)
+try:
+    hashfile
+except NameError:
+    def hashfile(afile, hasher, blocksize=65536):
         buf = afile.read(blocksize)
-    return hasher.hexdigest()
+        while len(buf) > 0:
+            hasher.update(buf)
+            buf = afile.read(blocksize)
+        return hasher.hexdigest()

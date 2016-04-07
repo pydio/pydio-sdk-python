@@ -18,8 +18,17 @@
 #  The latest code can be found at <http://pyd.io/>.
 #
 
-def _(message):
-    return message
+try:
+    from pydio.util import i18n
+    _ = i18n.language.ugettext
+except ImportError:
+    from utils import i18n
+    _ = i18n.language.ugettext
+try:
+    _
+except NameError:
+    def _(message):
+        return message
 
 class ProcessException(Exception):
     def __init__(self, src, operation, path, detail):
