@@ -728,11 +728,12 @@ class PydioSdk():
             f.seek(0, 2)  # end of file
             size = f.tell()
             while True:
-                logging.info(" Waiting for file write to end...")
-                time.sleep(.8)
                 f.seek(0, 2)  # end of file
                 if size == f.tell():
                     break
+                else:
+                    logging.info(" Waiting for file write to end...")
+                    time.sleep(.8)
                 size = f.tell()
         existing_part = False
         if (self.upload_max_size - 4096) < local_stat['size']:
