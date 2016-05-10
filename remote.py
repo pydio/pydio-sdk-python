@@ -311,6 +311,7 @@ class PydioSdk():
         :return:
         """
         # We know that token auth is not supported anyway
+        #logging.info(url)
         if self.stick_to_basic:
             return self.perform_basic(url, request_type=type, data=data, files=files, headers=headers, stream=stream,
                                           with_progress=with_progress)
@@ -368,6 +369,7 @@ class PydioSdk():
         :return:list a list of changes
         """
         url = self.url + '/changes/' + str(last_seq)
+        #logging.info(url)
         if self.remote_folder:
             url += '?filter=' + self.remote_folder
         try:
@@ -680,6 +682,7 @@ class PydioSdk():
         :return: dict() parsed configs
         """
         url = self.base_url + 'pydio/state/plugins?format=json'
+        #logging.info(url)
         resp = self.perform_request(url=url)
         server_data = dict()
         try:
@@ -691,15 +694,18 @@ class PydioSdk():
                         properties = p['plugin_configs']['property']
                         for prop in properties:
                             server_data[prop['@name']] = prop['$']
-            for p in plugins['meta']:
-                if p['@id'] == 'meta.filehasher':
-                    if 'plugin_configs' in p and 'property' in p['plugin_configs']:
-                        properties = p['plugin_configs']['property']
-                        if '@name' in properties:
-                            server_data[properties['@name']] = properties['$']
-                        else:
-                            for prop in properties:
-                                server_data[prop['@name']] = prop['$']
+            if "meta" in plugins:
+                for p in plugins['meta']:
+                    if p['@id'] == 'meta.filehasher':
+                        if 'plugin_configs' in p and 'property' in p['plugin_configs']:
+                            properties = p['plugin_configs']['property']
+                            if '@name' in properties:
+                                server_data[properties['@name']] = properties['$']
+                            else:
+                                for prop in properties:
+                                    server_data[prop['@name']] = prop['$']
+            else:
+                logging.info("Meta was not found in plugin information.")
         except KeyError as e:
             logging.exception(e)
         return server_data
@@ -758,6 +764,7 @@ class PydioSdk():
         try:
             self.perform_request(url=url, type='post', data=data, files=files, with_progress=callback_dict)
         except PydioSdkDefaultException as e:
+            logging.exception(e)
             status_handler.update_node_status(path, 'PENDING')
             if e.message == '507':
                 usage, total = self.quota_usage()
@@ -1023,7 +1030,6 @@ class PydioSdk():
             data['order_column'] = order_column
         if order_direction:
             data['order_direction'] = order_direction
-
         resp = self.perform_request(url=url, type='post', data=data)
         self.is_pydio_error_response(resp)
         queue = [ET.ElementTree(ET.fromstring(resp.content)).getroot()]
@@ -1183,7 +1189,7 @@ class PydioSdk():
                 existing_dlpart_size = existing_dlpart['size']
                 if filesize > existing_dlpart_size and \
                         file_start_hash_match(files['userfile_0'], existing_dlpart_size, existing_dlpart['hash']):
-                    logging.info('Found the beggining of this file on the other file, skipping the first pieces')
+                    logging.info('Found the beginning of this file on the other file, skipping the first pieces')
                     existing_pieces_number = existing_dlpart_size / max_size
                     cb(filesize, existing_dlpart_size, existing_dlpart_size, 0)
 
@@ -1403,3 +1409,8 @@ class PydioSdk():
         print "Submitted install form with response : " + resp.content
         return resp.content
 
+    def get_user_reps(self):
+        #TODO: finish me
+        url = self.base_url + "/api/pydio/state/user/repositories?format=json"
+        logging.info(url)
+        return ""
