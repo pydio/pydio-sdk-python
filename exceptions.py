@@ -19,7 +19,7 @@
 #
 
 try:
-    from pydio.util import i18n
+    from pydio.utils import i18n
     _ = i18n.language.ugettext
 except ImportError:
     from utils import i18n
