@@ -722,7 +722,7 @@ class PydioSdk():
         :return: Server response
         """
         if not local_stat:
-            raise PydioSdkException('upload', path, _('Local file to upload not found!'))
+            raise PydioSdkException('upload', path, _('Local file to upload not found!'), 1404)
         if local_stat['size'] == 0 and not self.stat(path):
             self.mkfile(path)
             new = self.stat(path)
@@ -843,7 +843,7 @@ class PydioSdk():
         """
         orig = self.stat(path)
         if not orig:
-            raise PydioSdkException('download', path, _('Original file was not found on server'))
+            raise PydioSdkException('download', path, _('Original file was not found on server'), 1404)
 
         url = self.url + '/download' + self.urlencode_normalized((self.remote_folder + path))
         local_tmp = local + '.pydio_dl'

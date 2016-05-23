@@ -39,8 +39,9 @@ class ProcessException(Exception):
 
 
 class PydioSdkException(ProcessException):
-    def __init__(self, operation, path, detail):
+    def __init__(self, operation, path, detail, code=0):
         super(PydioSdkException, self).__init__('sdk operation', operation, path, detail)
+        self.code = code
 
 class SystemSdkException(ProcessException):
     def __init__(self, operation, path, detail):
