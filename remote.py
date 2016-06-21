@@ -55,6 +55,7 @@ except NameError:
     def _(message):
         """ Fake i18n patch """
         return message
+
 """ For request debugging
 from httplib import HTTPConnection
 HTTPConnection.debuglevel = 1
@@ -62,6 +63,10 @@ logging.getLogger().setLevel(logging.DEBUG)
 requests_log = logging.getLogger("requests.packages.urllib3")
 requests_log.setLevel(logging.DEBUG)
 requests_log.propagate = True
+#"""
+"""
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 #"""
 
 PYDIO_SDK_MAX_UPLOAD_PIECES = 40 * 1024 * 1024
@@ -134,14 +139,11 @@ class PydioSdk():
         return urllib.pathname2url(unicode_path.encode('utf-8'))
 
     def normalize(self, unicode_path):
-        if platform.system() == 'Darwin':
-            try:
-                test = unicodedata.normalize('NFC', unicode_path)
-                return test
-            except ValueError as e:
-                logging.exception(e)
-                return unicode_path
-        else:
+        try:
+            test = unicodedata.normalize('NFC', unicode_path)
+            return test
+        except ValueError as e:
+            logging.exception(e)
             return unicode_path
 
     def normalize_reverse(self, unicode_path):
@@ -380,7 +382,7 @@ class PydioSdk():
             if platform.system() == "Darwin":
                 return json.loads(self.normalize_reverse(resp.content.decode('unicode_escape')))
             else:
-                return json.loads(resp.content)
+                return json.loads(self.normalize(resp.content.decode('unicode_escape')))
         except ValueError as v:
             logging.exception(v)
             raise Exception(_("Invalid JSON value received while getting remote changes. Is the server correctly configured?"))
@@ -1171,8 +1173,13 @@ class PydioSdk():
                 if unicode(http_response.text).lower().count("(410)") or unicode(http_response.text).lower().count("(411)"):
                     raise PydioSdkDefaultException(unicode(http_response.text))
 
-
-        filesize = os.stat(files['userfile_0']).st_size
+        try:
+            filesize = os.stat(files['userfile_0']).st_size
+        except OSError as e:
+            if e.errno == 2:
+                raise PydioSdkException('upload', files['userfile_0'], _('Local file to upload not found!'))
+            else:
+                raise e
         if max_size:
             # Reduce max size to leave some room for data header
             max_size -= 4096
@@ -1329,7 +1336,7 @@ class PydioSdk():
         data["dest"] = dest_folder
         if isinstance(files_to_copy, str) or isinstance(files_to_copy, unicode):
             data["nodes[]"] = files_to_copy
-        elif isintance(files_to_copy, list):
+        elif isinstance(files_to_copy, list):
             i = 0
             for filepath in files_to_copy:
                 data["node[" + str(i) + "]"] = filepath
