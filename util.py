@@ -152,7 +152,12 @@ def encode_multiparts(fields, basic_auth=None):
 
     #Add file data part except data
     header_body.write(b('%s\r\n' % boundary))
-    header_body.write(b('Content-Disposition: form-data; name="userfile_0"; filename="fake-name"\r\n'))
+    if 'urlencoded_filename' in fields:
+        header_body.write(b('Content-Disposition: form-data; name="userfile_0"; filename="' + fields['urlencoded_filename'] + '"\r\n'))
+    elif 'appendto_urlencoded_part' in fields:
+        header_body.write(b('Content-Disposition: form-data; name="userfile_0"; filename="' + fields['appendto_urlencoded_part'] + '"\r\n'))
+    else:
+        header_body.write(b('Content-Disposition: form-data; name="userfile_0"; filename="fake-name"\r\n'))
     header_body.write(b('Content-Type: application/octet-stream\r\n\r\n'))
 
     closing_boundary = b('\r\n%s--\r\n' % (boundary))
