@@ -423,7 +423,7 @@ class PydioSdk():
                         callback('remote', one_change, info)
 
                     except ValueError as v:
-                        logging.error('Invalid JSON Response, line was ' + line)
+                        logging.error('Invalid JSON Response, line was ' + str(line))
                         raise Exception(_('Invalid JSON value received while getting remote changes'))
                     except Exception as e:
                         logging.exception(e)
@@ -599,6 +599,7 @@ class PydioSdk():
         :param path: node path
         :return: result of the server query
         """
+        resp = None
         if localstat is not None:
             if not self.stat(path) and localstat['size'] == 0:
                 url = self.url + '/mkfile' + self.urlencode_normalized((self.remote_folder + path)) + '?force=true'
@@ -1150,6 +1151,7 @@ class PydioSdk():
                 logging.debug('Current transfer rate ' + str(rate))
 
         def parse_upload_rep(http_response):
+            #logging.info(http_response.text)
             if http_response.headers.get('content-type') != 'application/octet-stream':
                 if unicode(http_response.text).count('message type="ERROR"'):
 
@@ -1236,7 +1238,7 @@ class PydioSdk():
 
         if max_size and filesize > max_size:
             fields['appendto_urlencoded_part'] = fields['urlencoded_filename']
-            del fields['urlencoded_filename']
+            #del fields['urlencoded_filename']  # doesn't make sense, for some reason it was added at some point...
             (header_body, close_body, content_type) = encode_multiparts(fields)
             for i in range(existing_pieces_number, int(math.ceil(filesize / max_size)) + 1):
 
