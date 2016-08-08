@@ -104,6 +104,7 @@ class PydioSdk():
         self.should_fetch_changes = False
         self.remote_repo_id = None
         self.websocket_server_data = {}
+        self.waiter = None
 
     def set_server_configs(self, configs):
         """
@@ -317,7 +318,7 @@ class PydioSdk():
         :return:
         """
         # We know that token auth is not supported anyway
-        #logging.info(url)
+        logging.info(url)
         if self.stick_to_basic:
             return self.perform_basic(url, request_type=type, data=data, files=files, headers=headers, stream=stream,
                                           with_progress=with_progress)
@@ -1435,11 +1436,20 @@ class PydioSdk():
         print "Submitted install form with response : " + resp.content
         return resp.content
 
-    def get_user_reps(self):
+    def get_user_rep(self):
         #TODO: finish me
-        url = self.base_url + "/api/pydio/state/user/repositories?format=json"
-        logging.info(url)
-        return ""
+        url = self.base_url + "pydio/state/user/repositories?format=json"
+        resp = None
+        try:
+            resp = self.perform_request(url)
+            repo_data = json.loads(resp.content)
+            for r in repo_data['repositories']['repo']:
+                if r['@repositorySlug'] == self.ws_id:
+                    return r['@id']
+        except Exception as e:
+            logging.exception(e)
+        logging.info("Couldn't find repository id (" + self.ws_id + " @ " + url + ")")
+        return None
 
     def websocket_connect(self, last_seq, job_id=None):
         """
@@ -1460,15 +1470,14 @@ class PydioSdk():
                 self.should_fetch_changes = False
                 self.repo_id = repo_id
                 self.job_id = job_id
-                pos = self.repo_id.find('-')
+                """pos = self.repo_id.find('-')
                 if pos > -1:
-                    self.repo_id = self.repo_id[:pos].rstrip()
+                    self.repo_id = self.repo_id[:pos].rstrip()"""
                 self.tokens = tokens
 
-            def run(self):
+            def register(self):
                 try:
                     nonce = sha1(str(random.random())).hexdigest()
-
                     uri = "/api/pydio/ws_authenticate"  # TODO: ideally this should be server dependent
                     msg = uri + ':' + nonce + ':' + self.tokens['p']
                     the_hash = hmac.new(str(self.tokens['t']), str(msg), sha256)
@@ -1484,31 +1493,40 @@ class PydioSdk():
                     self.should_fetch_changes = True  # Terminate from caller
                     return
                 except Exception as e:
-                    logging.info("Websocket send failed")
+                    logging.info("Websocket registration failed")
                     logging.exception(e)
                     self.should_fetch_changes = True  # Terminate from caller
                     return
-                logging.info("Waiting for nodes_diff on workspace (" + self.job_id + ")")
-                try:
-                    res = self.ws.recv()
-                    logging.info("%r", res)
-                    #if res.find("nodes_diff") > -1 or res.find('reload') > -1:
-                    self.should_fetch_changes = True
-                except Exception as e:
-                    logging.info("Failed to receive websocket data")
-                    #logging.exception(e)
-                    self.should_fetch_changes = True
-                    return
+
+            def wait_for_changes(self):
+                while True:
+                    logging.info("Waiting for nodes_diff on workspace " + self.job_id)
+                    try:
+                        res = self.ws.recv()
+                        logging.info("%r", res)
+                        #if res.find("nodes_diff") > -1 or res.find('reload') > -1:
+                        self.should_fetch_changes = True
+                    except Exception as e:
+                        logging.info("Failed to receive websocket data")
+                        logging.exception(e)
+                        self.should_fetch_changes = True
+                        self.register()  # spaghetti, reconnect if for some reason the connection was closed
+
+            def run(self):
+                self.register()
+                self.wait_for_changes()
             # end thread run
+
             def stop(self):
                 self.wait = False
                 self.ws.send_close(websocket.STATUS_NORMAL, reason="User disconnect")
+                self.ws.close()
         # end of Waiter
 
         # fetch repo_id
         if self.remote_repo_id is None:
-            self.remote_repo_id = self.get_user_reps()
-            # fetch repo_id from last_seq
+            self.remote_repo_id = self.get_user_rep()
+            """# fetch repo_id from last_seq
             res = self.changes(last_seq-1)
             attempt = 0
             while len(res['changes']) == 0 and attempt < 10: #TODO find a better way to get the repository_identifier
@@ -1519,16 +1537,16 @@ class PydioSdk():
             except Exception as e:
                 logging.info("Problem fetching repository_identifier for websocket connection")
                 logging.exception(e)
-            #
-        try:
+            #"""
+        try:  # TODO check the right location for WS_ACTIVE
             #logging.info("Server data " + str(self.websocket_server_data))
             #if "WS_ACTIVE" in self.websocket_server_data:
              #   if self.websocket_server_data['WS_ACTIVE'] == 'true':
             ws_server = ""
             if self.websocket_server_data['WS_SECURE'] == 'false':
-                ws_server = "ws://" +self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + "/" + self.websocket_server_data["WS_PATH"]
+                ws_server = "ws://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + "/" + self.websocket_server_data["WS_PATH"]
             else:
-                ws_server = "wss://" +self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + self.websocket_server_data["WS_PATH"]
+                ws_server = "wss://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + self.websocket_server_data["WS_PATH"]
             self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens)
             self.waiter.start()
             #else:
