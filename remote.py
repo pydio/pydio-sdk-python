@@ -100,6 +100,10 @@ class PydioSdk():
         self.rsync_supported = False
         self.proxies = proxies
         self.timeout = timeout
+        # for websockets logic, sdk's state
+        self.should_fetch_changes = False
+        self.remote_repo_id = None
+        self.websocket_server_data = {}
 
     def set_server_configs(self, configs):
         """
@@ -707,6 +711,17 @@ class PydioSdk():
                             else:
                                 for prop in properties:
                                     server_data[prop['@name']] = prop['$']
+                #logging.info(json.dumps(data['plugins']['ajxp_plugin'], indent=4))
+                #logging.info(json.dumps(plugins['ajxp_plugin'], indent=4))
+                #if hasattr(plugins, 'ajxp_plugin'):
+                for p in data['plugins']['ajxp_plugin']:
+                    try:
+                        if p['@id'] == 'core.mq':
+                            for prop in p['plugin_configs']['property']:
+                                self.websocket_server_data[prop['@name']] = prop['$'].replace('\\', '').replace('"', '')
+                    except KeyError:
+                        pass
+                #logging.info(url + " : " + str(self.websocket_server_data))
             else:
                 logging.info("Meta was not found in plugin information.")
         except KeyError as e:
@@ -764,10 +779,12 @@ class PydioSdk():
             'xhr_uploader': 'true',
             'urlencoded_filename': self.urlencode_normalized(os.path.basename(path))
         }
+        resp = None
         try:
-            self.perform_request(url=url, type='post', data=data, files=files, with_progress=callback_dict)
+            resp = self.perform_request(url=url, type='post', data=data, files=files, with_progress=callback_dict)
         except PydioSdkDefaultException as e:
             logging.exception(e)
+            logging.info(resp.content)
             status_handler.update_node_status(path, 'PENDING')
             if e.message == '507':
                 usage, total = self.quota_usage()
@@ -1423,3 +1440,113 @@ class PydioSdk():
         url = self.base_url + "/api/pydio/state/user/repositories?format=json"
         logging.info(url)
         return ""
+
+    def websocket_connect(self, last_seq, job_id=None):
+        """
+        Instead of polling this blocks until <node_diff>(s) are received
+        This is dirty hacking going on here, we'll have to design a cleaner API
+        Authenticate on the websocket channel and fetch the list of watchable repos would be ideal
+        :param last_seq:
+        :return:
+        """
+        import websocket
+        import threading
+        class Waiter(threading.Thread):
+            def __init__(self, ws_reg_path, repo_id, tokens):
+                threading.Thread.__init__(self)
+                self.ws = websocket.WebSocket()
+                self.ws_reg_path = ws_reg_path
+                self.wait = True
+                self.should_fetch_changes = False
+                self.repo_id = repo_id
+                self.job_id = job_id
+                pos = self.repo_id.find('-')
+                if pos > -1:
+                    self.repo_id = self.repo_id[:pos].rstrip()
+                self.tokens = tokens
+
+            def run(self):
+                try:
+                    nonce = sha1(str(random.random())).hexdigest()
+
+                    uri = "/api/pydio/ws_authenticate"  # TODO: ideally this should be server dependent
+                    msg = uri + ':' + nonce + ':' + self.tokens['p']
+                    the_hash = hmac.new(str(self.tokens['t']), str(msg), sha256)
+                    auth_hash = nonce + ':' + the_hash.hexdigest()
+                    mess = "auth_hash=" + auth_hash + '&auth_token=' + self.tokens['t']
+                    self.ws.connect(self.ws_reg_path + "?" + mess)
+                    #logging.info('Sending auth on WS:// -- ' + mess)
+                    #self.ws.send(mess)
+                    #logging.info('Sending register on WS:// -- %r', "register:" + self.repo_id)
+                    self.ws.send("register:" + self.repo_id)
+                except websocket.WebSocketConnectionClosedException:
+                    logging.info("Websocket server (" + self.ws_reg_path + ") not responding for " + self.job_id + ".")
+                    self.should_fetch_changes = True  # Terminate from caller
+                    return
+                except Exception as e:
+                    logging.info("Websocket send failed")
+                    logging.exception(e)
+                    self.should_fetch_changes = True  # Terminate from caller
+                    return
+                logging.info("Waiting for nodes_diff on workspace (" + self.job_id + ")")
+                try:
+                    res = self.ws.recv()
+                    logging.info("%r", res)
+                    #if res.find("nodes_diff") > -1 or res.find('reload') > -1:
+                    self.should_fetch_changes = True
+                except Exception as e:
+                    logging.info("Failed to receive websocket data")
+                    #logging.exception(e)
+                    self.should_fetch_changes = True
+                    return
+            # end thread run
+            def stop(self):
+                self.wait = False
+                self.ws.send_close(websocket.STATUS_NORMAL, reason="User disconnect")
+        # end of Waiter
+
+        # fetch repo_id
+        if self.remote_repo_id is None:
+            self.remote_repo_id = self.get_user_reps()
+            # fetch repo_id from last_seq
+            res = self.changes(last_seq-1)
+            attempt = 0
+            while len(res['changes']) == 0 and attempt < 10: #TODO find a better way to get the repository_identifier
+                attempt += 1
+                res = self.changes(last_seq/2)
+            try:
+                self.remote_repo_id = res['changes'][0]['node']['repository_identifier']
+            except Exception as e:
+                logging.info("Problem fetching repository_identifier for websocket connection")
+                logging.exception(e)
+            #
+        try:
+            #logging.info("Server data " + str(self.websocket_server_data))
+            #if "WS_ACTIVE" in self.websocket_server_data:
+             #   if self.websocket_server_data['WS_ACTIVE'] == 'true':
+            ws_server = ""
+            if self.websocket_server_data['WS_SECURE'] == 'false':
+                ws_server = "ws://" +self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + "/" + self.websocket_server_data["WS_PATH"]
+            else:
+                ws_server = "wss://" +self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + self.websocket_server_data["WS_PATH"]
+            self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens)
+            self.waiter.start()
+            #else:
+             #   logging.info('Websocket server marked inactive.')
+              #  return False
+        except Exception as e:
+            if hasattr(e, "errno") and e.errno == 61:
+                 if hasattr(self, "failedWebSocketConnection"):
+                    self.failedWebSocketConnection += 1
+                 else:
+                     self.failedWebSocketConnection = 1
+                 logging.info("Failed to connect to websockets")
+                 return False
+            else:
+                logging.exception(e)
+                return False
+        return True
+
+    def websocket_disconnect(self):
+        self.waiter.wait = False
+        self.waiter.ws.close()
