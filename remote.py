@@ -320,7 +320,7 @@ class PydioSdk():
         :return:
         """
         # We know that token auth is not supported anyway
-        logging.info(url)
+        #logging.info(url)
         if self.stick_to_basic:
             return self.perform_basic(url, request_type=type, data=data, files=files, headers=headers, stream=stream,
                                           with_progress=with_progress)
@@ -783,7 +783,7 @@ class PydioSdk():
             'urlencoded_filename': self.urlencode_normalized(os.path.basename(path))
         }
         resp = None
-        logging.info(data)
+        #logging.info(data)
         try:
             resp = self.perform_request(url=url, type='post', data=data, files=files, with_progress=callback_dict)
         except PydioSdkDefaultException as e:
@@ -1240,7 +1240,7 @@ class PydioSdk():
             (header_body, close_body, content_type) = encode_multiparts(fields)
             body = BytesIOWithFile(header_body, close_body, files['userfile_0'], callback=cb, chunk_size=max_size,
                                    file_part=0, signal_sender=self)
-            logging.info(url)
+            #logging.info(url)
             resp = requests.post(
                 url,
                 data=body,
