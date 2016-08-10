@@ -28,6 +28,8 @@ from hashlib import sha256
 from hashlib import sha1
 from urlparse import urlparse
 import math
+import threading
+import websocket
 from requests.exceptions import ConnectionError, RequestException
 import keyring
 from keyring.errors import PasswordSetError
@@ -781,6 +783,7 @@ class PydioSdk():
             'urlencoded_filename': self.urlencode_normalized(os.path.basename(path))
         }
         resp = None
+        logging.info(data)
         try:
             resp = self.perform_request(url=url, type='post', data=data, files=files, with_progress=callback_dict)
         except PydioSdkDefaultException as e:
@@ -1237,7 +1240,7 @@ class PydioSdk():
             (header_body, close_body, content_type) = encode_multiparts(fields)
             body = BytesIOWithFile(header_body, close_body, files['userfile_0'], callback=cb, chunk_size=max_size,
                                    file_part=0, signal_sender=self)
-            #logging.info(url)
+            logging.info(url)
             resp = requests.post(
                 url,
                 data=body,
@@ -1459,70 +1462,6 @@ class PydioSdk():
         :param last_seq:
         :return:
         """
-        import websocket
-        import threading
-        class Waiter(threading.Thread):
-            def __init__(self, ws_reg_path, repo_id, tokens):
-                threading.Thread.__init__(self)
-                self.ws = websocket.WebSocket()
-                self.ws_reg_path = ws_reg_path
-                self.wait = True
-                self.should_fetch_changes = False
-                self.repo_id = repo_id
-                self.job_id = job_id
-                """pos = self.repo_id.find('-')
-                if pos > -1:
-                    self.repo_id = self.repo_id[:pos].rstrip()"""
-                self.tokens = tokens
-
-            def register(self):
-                try:
-                    nonce = sha1(str(random.random())).hexdigest()
-                    uri = "/api/pydio/ws_authenticate"  # TODO: ideally this should be server dependent
-                    msg = uri + ':' + nonce + ':' + self.tokens['p']
-                    the_hash = hmac.new(str(self.tokens['t']), str(msg), sha256)
-                    auth_hash = nonce + ':' + the_hash.hexdigest()
-                    mess = "auth_hash=" + auth_hash + '&auth_token=' + self.tokens['t']
-                    self.ws.connect(self.ws_reg_path + "?" + mess)
-                    #logging.info('Sending auth on WS:// -- ' + mess)
-                    #self.ws.send(mess)
-                    #logging.info('Sending register on WS:// -- %r', "register:" + self.repo_id)
-                    self.ws.send("register:" + self.repo_id)
-                except websocket.WebSocketConnectionClosedException:
-                    logging.info("Websocket server (" + self.ws_reg_path + ") not responding for " + self.job_id + ".")
-                    self.should_fetch_changes = True  # Terminate from caller
-                    return
-                except Exception as e:
-                    logging.info("Websocket registration failed")
-                    logging.exception(e)
-                    self.should_fetch_changes = True  # Terminate from caller
-                    return
-
-            def wait_for_changes(self):
-                while True:
-                    logging.info("Waiting for nodes_diff on workspace " + self.job_id)
-                    try:
-                        res = self.ws.recv()
-                        logging.info("%r", res)
-                        #if res.find("nodes_diff") > -1 or res.find('reload') > -1:
-                        self.should_fetch_changes = True
-                    except Exception as e:
-                        logging.info("Failed to receive websocket data")
-                        logging.exception(e)
-                        self.should_fetch_changes = True
-                        self.register()  # spaghetti, reconnect if for some reason the connection was closed
-
-            def run(self):
-                self.register()
-                self.wait_for_changes()
-            # end thread run
-
-            def stop(self):
-                self.wait = False
-                self.ws.send_close(websocket.STATUS_NORMAL, reason="User disconnect")
-                self.ws.close()
-        # end of Waiter
-
         # fetch repo_id
         if self.remote_repo_id is None:
             self.remote_repo_id = self.get_user_rep()
@@ -1543,23 +1482,23 @@ class PydioSdk():
             #if "WS_ACTIVE" in self.websocket_server_data:
              #   if self.websocket_server_data['WS_ACTIVE'] == 'true':
             ws_server = ""
-            if self.websocket_server_data['WS_SECURE'] == 'false':
-                ws_server = "ws://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + "/" + self.websocket_server_data["WS_PATH"]
+            if 'WS_SECURE' in self.websocket_server_data:
+                if self.websocket_server_data['WS_SECURE'] == 'false':
+                    ws_server = "ws://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + "/" + self.websocket_server_data["WS_PATH"]
+                else:
+                    ws_server = "wss://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + self.websocket_server_data["WS_PATH"]
             else:
-                ws_server = "wss://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + self.websocket_server_data["WS_PATH"]
-            self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens)
+                return False
+            self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens, self.ws_id)
             self.waiter.start()
             #else:
              #   logging.info('Websocket server marked inactive.')
               #  return False
         except Exception as e:
             if hasattr(e, "errno") and e.errno == 61:
-                 if hasattr(self, "failedWebSocketConnection"):
-                    self.failedWebSocketConnection += 1
-                 else:
-                     self.failedWebSocketConnection = 1
-                 logging.info("Failed to connect to websockets")
-                 return False
+                self.failedWebSocketConnection += 1
+                logging.info("Failed to connect to websockets")
+                return False
             else:
                 logging.exception(e)
                 return False
@@ -1568,3 +1507,87 @@ class PydioSdk():
     def websocket_disconnect(self):
         self.waiter.wait = False
         self.waiter.ws.close()
+
+class Waiter(threading.Thread):
+    def __init__(self, ws_reg_path, repo_id, tokens, job_id):
+        threading.Thread.__init__(self)
+        self.ws = websocket.WebSocket()
+        self.ws_reg_path = ws_reg_path
+        self.wait = True
+        self.should_fetch_changes = False
+        self.repo_id = repo_id
+        self.job_id = job_id
+        self.tokens = tokens
+        self.failedWebSocketConnection = 0
+        self.nextReconnect = 0
+
+    def register(self):
+        #logging.info("[ws] Register websockets on workspace " + self.job_id)
+        try:
+            nonce = sha1(str(random.random())).hexdigest()
+            uri = "/api/pydio/ws_authenticate"  # TODO: ideally this should be server dependent
+            msg = uri + ':' + nonce + ':' + self.tokens['p']
+            the_hash = hmac.new(str(self.tokens['t']), str(msg), sha256)
+            auth_hash = nonce + ':' + the_hash.hexdigest()
+            mess = "auth_hash=" + auth_hash + '&auth_token=' + self.tokens['t']
+            self.ws.connect(self.ws_reg_path + "?" + mess)
+            #logging.info('[ws] Sending auth on WS:// -- ' + mess)
+            #self.ws.send(mess)
+            #logging.info('[ws] Sending register on WS:// -- %r', "register:" + self.repo_id)
+            self.ws.send("register:" + self.repo_id)
+        except websocket.WebSocketConnectionClosedException:
+            self.failedWebSocketConnection += 1
+            logging.info("[ws] Websocket server (" + self.ws_reg_path + ") not responding for " + self.job_id + ".")
+            self.should_fetch_changes = True  # Terminate from caller
+            return
+        except Exception as e:
+            logging.info("[ws] Websocket registration failed")
+            logging.exception(e)
+            self.should_fetch_changes = True  # Terminate from caller
+            return
+
+    def wait_for_changes(self):
+        i = 0
+        if self.failedWebSocketConnection > 10:
+            if self.nextReconnect == 0:
+                # Will wait for 300s, then try to reconnect
+                logging.info("[ws] Disabling websockets, too many failures. ")
+                self.nextReconnect = time.time() + 300
+            elif time.time() > self.nextReconnect:
+                self.nextReconnect = 0
+                self.failedWebSocketConnection -= 5
+            return
+        while self.wait and i < 2:
+            logging.info("[ws] Waiting for nodes_diff on workspace " + self.job_id)
+            try:
+                res = self.ws.recv()
+                logging.info("[ws] message received %r [...]", res[:142])
+                #if res.find("nodes_diff") > -1 or res.find('reload') > -1: # parse messages ?
+                self.should_fetch_changes = True
+                i = 0
+            except websocket.WebSocketConnectionClosedException:
+                i += 1
+                self.register()  # spaghetti, reconnect if for some reason the connection was closed
+                time.sleep(.5)
+            except Exception as e:
+                i += 1
+                logging.info("[ws] Failed to receive websocket data")
+                logging.exception(e)
+                self.should_fetch_changes = True
+                self.register()  # spaghetti, reconnect if for some reason the connection was closed
+                time.sleep(.5)
+
+    def run(self):
+        self.register()
+        while self.wait:
+            self.wait_for_changes()
+            time.sleep(1)
+    # end thread run
+
+    def stop(self):
+        self.wait = False
+        if self.ws.connected:
+            self.ws.send_close(websocket.STATUS_NORMAL, reason="User disconnect")
+        self.ws.close()
+        self.ws.abort()
+# end of Waiter
