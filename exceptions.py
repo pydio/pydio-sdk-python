@@ -18,8 +18,17 @@
 #  The latest code can be found at <http://pyd.io/>.
 #
 
-def _(message):
-    return message
+try:
+    from pydio.utils import i18n
+    _ = i18n.language.ugettext
+except ImportError:
+    from utils import i18n
+    _ = i18n.language.ugettext
+try:
+    _
+except NameError:
+    def _(message):
+        return message
 
 class ProcessException(Exception):
     def __init__(self, src, operation, path, detail):
@@ -30,8 +39,9 @@ class ProcessException(Exception):
 
 
 class PydioSdkException(ProcessException):
-    def __init__(self, operation, path, detail):
+    def __init__(self, operation, path, detail, code=0):
         super(PydioSdkException, self).__init__('sdk operation', operation, path, detail)
+        self.code = code
 
 class SystemSdkException(ProcessException):
     def __init__(self, operation, path, detail):
