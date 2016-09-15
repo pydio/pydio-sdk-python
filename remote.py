@@ -29,7 +29,10 @@ from hashlib import sha1
 from urlparse import urlparse
 import math
 import threading
-import websocket
+try:
+    import websocket
+except ImportError:
+    pass
 from requests.exceptions import ConnectionError, RequestException
 import keyring
 from keyring.errors import PasswordSetError
