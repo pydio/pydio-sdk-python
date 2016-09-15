@@ -22,8 +22,11 @@ try:
     from pydio.utils import i18n
     _ = i18n.language.ugettext
 except ImportError:
-    from utils import i18n
-    _ = i18n.language.ugettext
+    try:
+        from utils import i18n
+        _ = i18n.language.ugettext
+    except ImportError:
+        pass
 try:
     _
 except NameError:

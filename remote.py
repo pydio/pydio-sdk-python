@@ -34,7 +34,7 @@ from requests.exceptions import ConnectionError, RequestException
 import keyring
 from keyring.errors import PasswordSetError
 import xml.etree.ElementTree as ET
-from exceptions import PydioSdkException, PydioSdkBasicAuthException, PydioSdkTokenAuthException, \
+from pydio_exceptions import PydioSdkException, PydioSdkBasicAuthException, PydioSdkTokenAuthException, \
     PydioSdkQuotaException, PydioSdkPermissionException, PydioSdkTokenAuthNotSupportedException, PydioSdkDefaultException
 from util import *
 try:
@@ -43,9 +43,12 @@ try:
     from pydio.utils import i18n
     _ = i18n.language.ugettext
 except ImportError:
-    from utils.functions import hashfile
-    from utils import i18n
-    _ = i18n.language.ugettext
+    try:
+        from utils.functions import hashfile
+        from utils import i18n
+        _ = i18n.language.ugettext
+    except ImportError:
+        from util import hashfile
     try:
         TRANSFER_RATE_SIGNAL
     except NameError:

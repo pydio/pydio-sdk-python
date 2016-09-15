@@ -6,6 +6,8 @@ Python 2 SDK to communicate with Pydio backend.
 Installation instructions
 =========================
 
+You can add this SDK to your project following these steps. This will create a directory called pydiosdkpython.
+
 Python 2
 --------
 
@@ -31,6 +33,8 @@ Example usage
 
 List the file in *My Files*
 ---------------------------
+
+You can try running the file **example.py** or import the SDK to your project.
 
 ```python
 from pydiosdkpython.remote import PydioSdk
