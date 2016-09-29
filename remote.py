@@ -480,6 +480,8 @@ class PydioSdk():
                 data = json.loads(content)
             except ValueError as ve:
                 logging.exception(ve)
+                if content:
+                    logging.info(content)
                 return False
             logging.debug("data: %s" % data)
             if not data:
@@ -720,11 +722,15 @@ class PydioSdk():
                 #logging.info(json.dumps(data['plugins']['ajxp_plugin'], indent=4))
                 #logging.info(json.dumps(plugins['ajxp_plugin'], indent=4))
                 #if hasattr(plugins, 'ajxp_plugin'):
+                # Get websocket information... #yolo
                 for p in data['plugins']['ajxp_plugin']:
                     try:
                         if p['@id'] == 'core.mq':
                             for prop in p['plugin_configs']['property']:
-                                self.websocket_server_data[prop['@name']] = prop['$'].replace('\\', '').replace('"', '')
+                                if prop['@name'] not in ['BOOSTER_WS_ADVANCED', 'BOOSTER_UPLOAD_ADVANCED']:
+                                    self.websocket_server_data[prop['@name']] = prop['$'].replace('\\', '').replace('"', '')
+                                else:
+                                    self.websocket_server_data[prop['@name']] = json.loads(prop['$'].replace('\\', ''))
                     except KeyError:
                         pass
                 #logging.info(url + " : " + str(self.websocket_server_data))
@@ -791,7 +797,8 @@ class PydioSdk():
             resp = self.perform_request(url=url, type='post', data=data, files=files, with_progress=callback_dict)
         except PydioSdkDefaultException as e:
             logging.exception(e)
-            logging.info(resp.content)
+            if resp and resp.content:
+                logging.info(resp.content)
             status_handler.update_node_status(path, 'PENDING')
             if e.message == '507':
                 usage, total = self.quota_usage()
@@ -1468,35 +1475,39 @@ class PydioSdk():
         # fetch repo_id
         if self.remote_repo_id is None:
             self.remote_repo_id = self.get_user_rep()
-            """# fetch repo_id from last_seq
-            res = self.changes(last_seq-1)
-            attempt = 0
-            while len(res['changes']) == 0 and attempt < 10: #TODO find a better way to get the repository_identifier
-                attempt += 1
-                res = self.changes(last_seq/2)
-            try:
-                self.remote_repo_id = res['changes'][0]['node']['repository_identifier']
-            except Exception as e:
-                logging.info("Problem fetching repository_identifier for websocket connection")
-                logging.exception(e)
-            #"""
-        try:  # TODO check the right location for WS_ACTIVE
+        host = None
+        port = None
+        ws_server = ""
+        try:
             #logging.info("Server data " + str(self.websocket_server_data))
-            #if "WS_ACTIVE" in self.websocket_server_data:
-             #   if self.websocket_server_data['WS_ACTIVE'] == 'true':
-            ws_server = ""
-            if 'WS_SECURE' in self.websocket_server_data:
-                if self.websocket_server_data['WS_SECURE'] == 'false':
-                    ws_server = "ws://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + "/" + self.websocket_server_data["WS_PATH"]
+            if "BOOSTER_MAIN_HOST" in self.websocket_server_data:
+                host = self.websocket_server_data["BOOSTER_MAIN_HOST"]
+            if "BOOSTER_MAIN_PORT" in self.websocket_server_data:
+                port = self.websocket_server_data["BOOSTER_MAIN_PORT"]
+            if "BOOSTER_WS_ADVANCED" in self.websocket_server_data:
+                booster_ws_advanced = self.websocket_server_data['BOOSTER_WS_ADVANCED']
+                if 'booster_ws_advanced' in booster_ws_advanced and\
+                        booster_ws_advanced['booster_ws_advanced'] == 'custom' and 'WS_HOST' in booster_ws_advanced:
+                    host = booster_ws_advanced['WS_HOST']
+                    if "BOOSTER_MAIN_PORT" in booster_ws_advanced:
+                        port = booster_ws_advanced["BOOSTER_MAIN_PORT"]
+                    if "WS_PORT" in booster_ws_advanced:
+                        port = booster_ws_advanced["WS_PORT"]
+            if "WS_ACTIVE" in self.websocket_server_data:
+                if self.websocket_server_data['WS_ACTIVE'] == 'true':
+                    if 'WS_SECURE' in self.websocket_server_data:
+                        if self.websocket_server_data['WS_SECURE'] == 'false':
+                            ws_server = "ws://"
+                        else:
+                            ws_server = "wss://"
+                    ws_server += host + ":" + port + "/" + self.websocket_server_data["WS_PATH"]
+                    self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens, self.ws_id)
+                    self.waiter.start()
                 else:
-                    ws_server = "wss://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + self.websocket_server_data["WS_PATH"]
+                    return False
             else:
+                logging.info('Websocket server marked inactive.')
                 return False
-            self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens, self.ws_id)
-            self.waiter.start()
-            #else:
-             #   logging.info('Websocket server marked inactive.')
-              #  return False
         except Exception as e:
             if hasattr(e, "errno") and e.errno == 61:
                 self.failedWebSocketConnection += 1
@@ -1514,7 +1525,7 @@ class PydioSdk():
 class Waiter(threading.Thread):
     def __init__(self, ws_reg_path, repo_id, tokens, job_id):
         threading.Thread.__init__(self)
-        self.ws = websocket.WebSocket()
+        self.ws = websocket.WebSocket(Cookie="'AjaXplorer':'rhddga11p3uf1c4aovfhop9f34','ajxp_licheck':'ok'")
         self.ws_reg_path = ws_reg_path
         self.wait = True
         self.should_fetch_changes = False
@@ -1544,25 +1555,27 @@ class Waiter(threading.Thread):
             self.should_fetch_changes = True  # Terminate from caller
             return
         except Exception as e:
-            logging.info("[ws] Websocket registration failed")
+            self.failedWebSocketConnection += 1
             logging.exception(e)
+            logging.info("[ws] Websocket registration failed with URL: " + self.ws_reg_path + "?" + mess)
+            logging.info("[ws] payload was: " + "register:" + self.repo_id)
             self.should_fetch_changes = True  # Terminate from caller
             return
 
     def wait_for_changes(self):
         i = 0
-        if self.failedWebSocketConnection > 10:
+        if self.failedWebSocketConnection > 5:
             if self.nextReconnect == 0:
                 # Will wait for 300s, then try to reconnect
                 logging.info("[ws] Disabling websockets, too many failures. ")
                 self.nextReconnect = time.time() + 300
             elif time.time() > self.nextReconnect:
                 self.nextReconnect = 0
-                self.failedWebSocketConnection -= 5
+                self.failedWebSocketConnection -= 2
             return
         while self.wait and i < 2:
-            logging.info("[ws] Waiting for nodes_diff on workspace " + self.job_id)
             try:
+                logging.info("[ws] Waiting for nodes_diff on workspace " + self.job_id)
                 res = self.ws.recv()
                 logging.info("[ws] message received %r [...]", res[:142])
                 #if res.find("nodes_diff") > -1 or res.find('reload') > -1: # parse messages ?
