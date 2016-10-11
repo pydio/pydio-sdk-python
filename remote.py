@@ -749,12 +749,12 @@ class PydioSdk():
         # BOOSTER_MAIN_SECURE or self.url ?
         url = None
         try:
-            host, port, prot = None, None, None
+            host, port, prot = None, None, 'http'
             if 'BOOSTER_UPLOAD_ADVANCED' in self.websocket_server_data and \
-                            'UPLOAD_ACTIVE' in self.websocket_server_data and \
-                             self.websocket_server_data['UPLOAD_ACTIVE'] == 'true':
+                'UPLOAD_ACTIVE' in self.websocket_server_data and \
+                self.websocket_server_data['UPLOAD_ACTIVE'] == 'true':
                 if 'booster_upload_advanced' in self.websocket_server_data['BOOSTER_UPLOAD_ADVANCED'] and \
-                    self.websocket_server_data['BOOSTER_UPLOAD_ADVANCED']['booster_upload_advanced'] == 'custom':
+                        self.websocket_server_data['BOOSTER_UPLOAD_ADVANCED']['booster_upload_advanced'] == 'custom':
                         if 'UPLOAD_HOST' in self.websocket_server_data:
                             host = self.websocket_server_data['UPLOAD_HOST']
                         if 'UPLOAD_PORT' in self.websocket_server_data:
@@ -762,22 +762,23 @@ class PydioSdk():
                 else:
                     host = self.websocket_server_data['BOOSTER_MAIN_HOST']
                     port = self.websocket_server_data['BOOSTER_MAIN_PORT']
-                if "BOOSTER_MAIN_SECURE" in self.websocket_server_data and \
-                    self.websocket_server_data['BOOSTER_MAIN_SECURE'] == 'true':
+                if 'BOOSTER_MAIN_SECURE' in self.websocket_server_data and \
+                        self.websocket_server_data['BOOSTER_MAIN_SECURE'] == 'true':
                         prot = 'https'
-                else:
-                    prot = 'http'
+                if 'UPLOAD_SECURE' in self.websocket_server_data and \
+                        self.websocket_server_data['UPLOAD_SECURE'] == 'true':
+                        prot = 'https'
             if self.remote_repo_id is None:
                 self.remote_repo_id = self.get_user_rep()
             nonce = sha1(str(random.random())).hexdigest()
-            uri = "/api/" + self.remote_repo_id + "/upload/put" + os.path.dirname(file_path)
+            uri = '/api/' + self.remote_repo_id + '/upload/put' + os.path.dirname(file_path)
             #logging.info("URI: " + uri)
             msg = uri + ':' + nonce + ':' + self.tokens['p']
             the_hash = hmac.new(str(self.tokens['t']), str(msg), sha256)
             auth_hash = nonce + ':' + the_hash.hexdigest()
-            mess = "auth_hash=" + auth_hash + '&auth_token=' + self.tokens['t']
-            url = prot + "://" + host + ":" + port + "/" + self.websocket_server_data["UPLOAD_PATH"] + "/" + self.remote_repo_id + file_path + "?" + mess
-            logging.info("UPLOAD TYPE 2")
+            mess = 'auth_hash=' + auth_hash + '&auth_token=' + self.tokens['t']
+            url = prot + "://" + host + ":" + port + "/" + self.websocket_server_data['UPLOAD_PATH'] + '/' + self.remote_repo_id + file_path + '?' + mess
+            #logging.info('UPLOAD TYPE 2')
         except Exception as e:
             logging.exception(e)
             url = self.url + '/upload/put' + file_path
@@ -1520,7 +1521,7 @@ class PydioSdk():
             self.remote_repo_id = self.get_user_rep()
         host = None
         port = None
-        ws_server = ""
+        ws_server = "ws://"
         try:
             #logging.info("Server data " + str(self.websocket_server_data))
             if "BOOSTER_MAIN_HOST" in self.websocket_server_data:
@@ -1539,9 +1540,10 @@ class PydioSdk():
             if "WS_ACTIVE" in self.websocket_server_data:
                 if self.websocket_server_data['WS_ACTIVE'] == 'true':
                     if 'WS_SECURE' in self.websocket_server_data:
-                        if self.websocket_server_data['WS_SECURE'] == 'false':
-                            ws_server = "ws://"
-                        else:
+                        if self.websocket_server_data['WS_SECURE'] == 'true':
+                            ws_server = "wss://"
+                    if 'BOOSTER_MAIN_SECURE' in self.websocket_server_data:
+                        if self.websocket_server_data['BOOSTER_MAIN_SECURE'] == 'true':
                             ws_server = "wss://"
                     ws_server += host + ":" + port + "/" + self.websocket_server_data["WS_PATH"]
                     self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens, self.ws_id)
