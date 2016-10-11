@@ -1570,7 +1570,7 @@ class PydioSdk():
 class Waiter(threading.Thread):
     def __init__(self, ws_reg_path, repo_id, tokens, job_id):
         threading.Thread.__init__(self)
-        self.ws = websocket.WebSocket(Cookie="'AjaXplorer':'rhddga11p3uf1c4aovfhop9f34','ajxp_licheck':'ok'")
+        self.ws = websocket.WebSocket()
         self.ws_reg_path = ws_reg_path
         self.wait = True
         self.should_fetch_changes = False
