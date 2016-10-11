@@ -740,6 +740,49 @@ class PydioSdk():
             logging.exception(e)
         return server_data
 
+    def upload_url(self, file_path):
+        """
+        Generate a signed URI to upload to depending on supported server features
+        :param file_path:
+        :return: the url on which the file should be uploaded to
+        """
+        # BOOSTER_MAIN_SECURE or self.url ?
+        url = None
+        try:
+            host, port, prot = None, None, None
+            if 'BOOSTER_UPLOAD_ADVANCED' in self.websocket_server_data and \
+                            'UPLOAD_ACTIVE' in self.websocket_server_data and \
+                             self.websocket_server_data['UPLOAD_ACTIVE'] == 'true':
+                if 'booster_upload_advanced' in self.websocket_server_data['BOOSTER_UPLOAD_ADVANCED'] and \
+                    self.websocket_server_data['BOOSTER_UPLOAD_ADVANCED']['booster_upload_advanced'] == 'custom':
+                        if 'UPLOAD_HOST' in self.websocket_server_data:
+                            host = self.websocket_server_data['UPLOAD_HOST']
+                        if 'UPLOAD_PORT' in self.websocket_server_data:
+                            port = self.websocket_server_data['UPLOAD_PORT']
+                else:
+                    host = self.websocket_server_data['BOOSTER_MAIN_HOST']
+                    port = self.websocket_server_data['BOOSTER_MAIN_PORT']
+                if "BOOSTER_MAIN_SECURE" in self.websocket_server_data and \
+                    self.websocket_server_data['BOOSTER_MAIN_SECURE'] == 'true':
+                        prot = 'https'
+                else:
+                    prot = 'http'
+            if self.remote_repo_id is None:
+                self.remote_repo_id = self.get_user_rep()
+            nonce = sha1(str(random.random())).hexdigest()
+            uri = "/api/" + self.remote_repo_id + "/upload/put" + os.path.dirname(file_path)
+            #logging.info("URI: " + uri)
+            msg = uri + ':' + nonce + ':' + self.tokens['p']
+            the_hash = hmac.new(str(self.tokens['t']), str(msg), sha256)
+            auth_hash = nonce + ':' + the_hash.hexdigest()
+            mess = "auth_hash=" + auth_hash + '&auth_token=' + self.tokens['t']
+            url = prot + "://" + host + ":" + port + "/" + self.websocket_server_data["UPLOAD_PATH"] + "/" + self.remote_repo_id + file_path + "?" + mess
+            logging.info("UPLOAD TYPE 2")
+        except Exception as e:
+            logging.exception(e)
+            url = self.url + '/upload/put' + file_path
+        return url
+
     def upload_and_hashstat(self, local, local_stat, path, status_handler, callback_dict=None, max_upload_size=-1):
         """
         Upload a file to the server.
@@ -780,7 +823,7 @@ class PydioSdk():
             folder = self.stat(dirpath)
             if not folder:
                 self.mkdir(os.path.dirname(path))
-        url = self.url + '/upload/put' + self.urlencode_normalized((self.remote_folder + os.path.dirname(path)))
+        url = self.upload_url(self.urlencode_normalized(path))
         files = {
             'userfile_0': local
         }
@@ -1563,7 +1606,7 @@ class Waiter(threading.Thread):
             return
 
     def wait_for_changes(self):
-        i = 0
+        i = 0  # current number of connection attempts
         if self.failedWebSocketConnection > 5:
             if self.nextReconnect == 0:
                 # Will wait for 300s, then try to reconnect
@@ -1583,10 +1626,12 @@ class Waiter(threading.Thread):
                 i = 0
             except websocket.WebSocketConnectionClosedException:
                 i += 1
+                self.failedWebSocketConnection += 1
                 self.register()  # spaghetti, reconnect if for some reason the connection was closed
                 time.sleep(.5)
             except Exception as e:
                 i += 1
+                self.failedWebSocketConnection += 1
                 logging.info("[ws] Failed to receive websocket data")
                 logging.exception(e)
                 self.should_fetch_changes = True
