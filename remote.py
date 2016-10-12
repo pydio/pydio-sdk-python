@@ -741,7 +741,7 @@ class PydioSdk():
             logging.exception(e)
         return server_data
 
-    def upload_url(self, file_path):
+    def upload_url(self, path):
         """
         Generate a signed URI to upload to depending on supported server features
         :param file_path:
@@ -749,6 +749,7 @@ class PydioSdk():
         """
         # BOOSTER_MAIN_SECURE or self.url ?
         url = None
+        file_path = self.urlencode_normalized(path)
         try:
             host, port, prot = None, None, 'http'
             if 'BOOSTER_UPLOAD_ADVANCED' in self.websocket_server_data and \
@@ -782,7 +783,7 @@ class PydioSdk():
             #logging.info('UPLOAD TYPE 2')
         except Exception as e:
             logging.exception(e)
-            url = self.url + '/upload/put' + file_path
+            url = self.url + '/upload/put' + self.urlencode_normalized((self.remote_folder + os.path.dirname(path)))
         return url
 
     def upload_and_hashstat(self, local, local_stat, path, status_handler, callback_dict=None, max_upload_size=-1):
@@ -825,7 +826,7 @@ class PydioSdk():
             folder = self.stat(dirpath)
             if not folder:
                 self.mkdir(os.path.dirname(path))
-        url = self.upload_url(self.urlencode_normalized(path))
+        url = self.upload_url(path)
         files = {
             'userfile_0': local
         }
