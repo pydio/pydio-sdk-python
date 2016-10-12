@@ -30,6 +30,7 @@ from urlparse import urlparse
 import math
 import threading
 import websocket
+import ssl
 from requests.exceptions import ConnectionError, RequestException
 import keyring
 from keyring.errors import PasswordSetError
@@ -1546,7 +1547,7 @@ class PydioSdk():
                         if self.websocket_server_data['BOOSTER_MAIN_SECURE'] == 'true':
                             ws_server = "wss://"
                     ws_server += host + ":" + port + "/" + self.websocket_server_data["WS_PATH"]
-                    self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens, self.ws_id)
+                    self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens, self.ws_id, self.verify_ssl)
                     self.waiter.start()
                 else:
                     return False
@@ -1568,9 +1569,12 @@ class PydioSdk():
         self.waiter.ws.close()
 
 class Waiter(threading.Thread):
-    def __init__(self, ws_reg_path, repo_id, tokens, job_id):
+    def __init__(self, ws_reg_path, repo_id, tokens, job_id, verify_ssl=True):
         threading.Thread.__init__(self)
-        self.ws = websocket.WebSocket()
+        if not verify_ssl:
+            self.ws = websocket.WebSocket(sslopt={"cert_reqs": ssl.CERT_NONE})
+        else:
+            self.ws = websocket.WebSocket()
         self.ws_reg_path = ws_reg_path
         self.wait = True
         self.should_fetch_changes = False
