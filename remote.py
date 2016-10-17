@@ -747,6 +747,8 @@ class PydioSdk():
         :param file_path:
         :return: the url on which the file should be uploaded to
         """
+        # TEMPORARILY DISABLE
+        return self.url + '/upload/put' + self.urlencode_normalized((self.remote_folder + os.path.dirname(path)))
         # BOOSTER_MAIN_SECURE or self.url ?
         url = None
         file_path = self.urlencode_normalized(path)
@@ -1553,7 +1555,7 @@ class PydioSdk():
                 else:
                     return False
             else:
-                logging.info('Websocket server marked inactive.')
+                #logging.info('Websocket server marked inactive.')
                 return False
         except Exception as e:
             if hasattr(e, "errno") and e.errno == 61:
@@ -1594,10 +1596,8 @@ class Waiter(threading.Thread):
             the_hash = hmac.new(str(self.tokens['t']), str(msg), sha256)
             auth_hash = nonce + ':' + the_hash.hexdigest()
             mess = "auth_hash=" + auth_hash + '&auth_token=' + self.tokens['t']
+            #logging.info("Connecting to " + self.ws_reg_path + "?" + mess)
             self.ws.connect(self.ws_reg_path + "?" + mess)
-            #logging.info('[ws] Sending auth on WS:// -- ' + mess)
-            #self.ws.send(mess)
-            #logging.info('[ws] Sending register on WS:// -- %r', "register:" + self.repo_id)
             self.ws.send("register:" + self.repo_id)
         except websocket.WebSocketConnectionClosedException:
             self.failedWebSocketConnection += 1
@@ -1626,6 +1626,7 @@ class Waiter(threading.Thread):
         while self.wait and i < 2:
             try:
                 logging.info("[ws] Waiting for nodes_diff on workspace " + self.job_id)
+                # TODO FIND A WAY TO KILL IT
                 res = self.ws.recv()
                 logging.info("[ws] message received %r [...]", res[:142])
                 #if res.find("nodes_diff") > -1 or res.find('reload') > -1: # parse messages ?
