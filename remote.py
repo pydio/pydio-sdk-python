@@ -102,7 +102,6 @@ class PydioSdk():
             self.auth = (user_id, keyring.get_password(url, user_id))
         else:
             self.auth = auth
-        self.tokens = None
         self.rsync_supported = False
         self.proxies = proxies
         self.timeout = timeout
@@ -169,19 +168,21 @@ class PydioSdk():
             return unicode_path
 
     def set_tokens(self, tokens):
-        self.tokens = tokens
         try:
-            keyring.set_password(self.base_url, self.user_id + '-token', tokens['t'] + ':' + tokens['p'])
-        except PasswordSetError:
+            user = self.user_id + '-token'
+            password = tokens['t'] + ':' + tokens['p']
+            keyring.set_password(self.base_url, user, password)
+        except PasswordSetError as pe:
+            logging.info("Failed to set_tokens " + self.base_url + " " + self.ws_id)
+            logging.exception(pe)
             logging.error(_("Cannot store tokens in keychain, there might be an OS permission issue!"))
 
-    def get_tokens(self):
-        if not self.tokens:
-            k_tok = keyring.get_password(self.base_url, self.user_id + '-token')
-            if k_tok:
-                parts = k_tok.split(':')
-                self.tokens = {'t': parts[0], 'p': parts[1]}
-        return self.tokens
+    def get_tokens(self, from_keyring=False):
+        k_tok = keyring.get_password(self.base_url, self.user_id + '-token')
+        if k_tok:
+            parts = k_tok.split(':')
+            tokens = {'t': parts[0], 'p': parts[1]}
+        return tokens
 
     def basic_authenticate(self):
         """
@@ -189,6 +190,9 @@ class PydioSdk():
         users credentials at each requests
         :return:dict()
         """
+        # only authenticate if you're the token latest owner RACE CONDITION of DEATH
+        tokens = self.get_tokens()
+        org_tokens = self.get_tokens()
         url = self.base_url + 'pydio/keystore_generate_auth_token/' + self.device_id
         resp = requests.get(url=url, auth=self.auth, verify=self.verify_ssl, proxies=self.proxies)
         if resp.status_code == 401:
@@ -203,9 +207,11 @@ class PydioSdk():
             tokens = json.loads(resp.content)
         except ValueError as v:
             raise PydioSdkException("basic_auth", "", "Cannot parse JSON result: " + resp.content + "")
-            #return False
-
-        self.set_tokens(tokens)
+        keyring_tokens = self.get_tokens() # make sure the token wasn't updated during this update
+        if keyring_tokens['t'] == org_tokens['t'] and keyring_tokens['p'] == org_tokens['p']:
+            self.set_tokens(tokens)
+        else:
+            tokens = keyring_tokens
         return tokens
 
     def perform_basic(self, url, request_type='get', data=None, files=None, headers=None, stream=False, with_progress=False):
@@ -350,7 +356,7 @@ class PydioSdk():
             except requests.exceptions.ConnectionError:
                 raise
             except PydioSdkTokenAuthException as pTok:
-                # Tokens may be revoked? Retry
+                # Token exception -> Authenticate
                 try:
                     tokens = self.basic_authenticate()
                 except PydioSdkTokenAuthNotSupportedException:
@@ -359,12 +365,11 @@ class PydioSdk():
                                  'good for performances, but might be necessary for session credential based setups.')
                     return self.perform_basic(url, request_type=type, data=data, files=files, headers=headers, stream=stream,
                                               with_progress=with_progress)
-
                 try:
                     return self.perform_with_tokens(tokens['t'], tokens['p'], url, type, data, files,
                                                     headers=headers, stream=stream, with_progress=with_progress)
                 except PydioSdkTokenAuthException as secTok:
-                    logging.error('Second Auth Error, what is wrong?')
+                    logging.exception("(2) Token problem " + self.base_url + " " + self.ws_id)
                     raise secTok
 
     def check_basepath(self):
@@ -777,10 +782,11 @@ class PydioSdk():
             nonce = sha1(str(random.random())).hexdigest()
             uri = '/api/' + self.remote_repo_id + '/upload/put' + os.path.dirname(file_path)
             #logging.info("URI: " + uri)
-            msg = uri + ':' + nonce + ':' + self.tokens['p']
-            the_hash = hmac.new(str(self.tokens['t']), str(msg), sha256)
+            tokens = self.get_tokens()
+            msg = uri + ':' + nonce + ':' + tokens['p']
+            the_hash = hmac.new(str(tokens['t']), str(msg), sha256)
             auth_hash = nonce + ':' + the_hash.hexdigest()
-            mess = 'auth_hash=' + auth_hash + '&auth_token=' + self.tokens['t']
+            mess = 'auth_hash=' + auth_hash + '&auth_token=' + tokens['t']
             url = prot + "://" + host + ":" + port + "/" + self.websocket_server_data['UPLOAD_PATH'] + '/' + self.remote_repo_id + file_path + '?' + mess
             #logging.info('UPLOAD TYPE 2')
         except Exception as e:
@@ -1550,7 +1556,7 @@ class PydioSdk():
                         if self.websocket_server_data['BOOSTER_MAIN_SECURE'] == 'true':
                             ws_server = "wss://"
                     ws_server += host + ":" + port + "/" + self.websocket_server_data["WS_PATH"]
-                    self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens, self.ws_id, self.verify_ssl)
+                    self.waiter = Waiter(ws_server, self.remote_repo_id, self.get_tokens(), self.ws_id, self.verify_ssl)
                     self.waiter.start()
                 else:
                     return False
