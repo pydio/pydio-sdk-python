@@ -182,7 +182,9 @@ class PydioSdk():
         if k_tok:
             parts = k_tok.split(':')
             tokens = {'t': parts[0], 'p': parts[1]}
-        return tokens
+            return tokens
+        else:
+            return False
 
     def basic_authenticate(self):
         """
@@ -207,8 +209,8 @@ class PydioSdk():
             tokens = json.loads(resp.content)
         except ValueError as v:
             raise PydioSdkException("basic_auth", "", "Cannot parse JSON result: " + resp.content + "")
-        keyring_tokens = self.get_tokens() # make sure the token wasn't updated during this update
-        if keyring_tokens['t'] == org_tokens['t'] and keyring_tokens['p'] == org_tokens['p']:
+        keyring_tokens = self.get_tokens()  # make sure the token wasn't updated during this update
+        if not keyring_tokens or (keyring_tokens['t'] == org_tokens['t'] and keyring_tokens['p'] == org_tokens['p']):
             self.set_tokens(tokens)
         else:
             tokens = keyring_tokens
