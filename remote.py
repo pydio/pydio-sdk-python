@@ -1625,7 +1625,7 @@ class Waiter(threading.Thread):
         if self.failedWebSocketConnection > 5:
             if self.nextReconnect == 0:
                 # Will wait for 300s, then try to reconnect
-                logging.info("[ws] Disabling websockets, too many failures. ")
+                logging.info("[ws] Disabling websockets, too many failures. " + self.job_id)
                 self.nextReconnect = time.time() + 300
             elif time.time() > self.nextReconnect:
                 self.nextReconnect = 0
@@ -1648,7 +1648,7 @@ class Waiter(threading.Thread):
             except Exception as e:
                 i += 1
                 self.failedWebSocketConnection += 1
-                logging.info("[ws] Failed to receive websocket data")
+                logging.info("[ws] Failed to receive websocket data on workspace " + self.job_id)
                 logging.exception(e)
                 self.should_fetch_changes = True
                 self.register()  # spaghetti, reconnect if for some reason the connection was closed
