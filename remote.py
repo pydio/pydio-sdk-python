@@ -1159,7 +1159,7 @@ class PydioSdk():
 
     def apply_check_hook(self, hook_name='', hook_arg='', file='/'):
         url = self.url + '/apply_check_hook/'+hook_name+'/'+str(hook_arg)+'/'
-        resp = self.perform_request(url=url, type='post', data={'file': self.normalize(file)})
+        resp = self.perform_request(url=url, type='post', data={'file': self.normalize(file).replace('\\', '/')})
         return resp
 
     def quota_usage(self):
