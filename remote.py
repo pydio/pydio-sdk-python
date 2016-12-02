@@ -30,6 +30,7 @@ from urlparse import urlparse
 import math
 import threading
 import websocket
+import ssl
 from requests.exceptions import ConnectionError, RequestException
 import keyring
 from keyring.errors import PasswordSetError
@@ -101,7 +102,6 @@ class PydioSdk():
             self.auth = (user_id, keyring.get_password(url, user_id))
         else:
             self.auth = auth
-        self.tokens = None
         self.rsync_supported = False
         self.proxies = proxies
         self.timeout = timeout
@@ -168,19 +168,23 @@ class PydioSdk():
             return unicode_path
 
     def set_tokens(self, tokens):
-        self.tokens = tokens
         try:
-            keyring.set_password(self.base_url, self.user_id + '-token', tokens['t'] + ':' + tokens['p'])
-        except PasswordSetError:
+            user = self.user_id + '-token'
+            password = tokens['t'] + ':' + tokens['p']
+            keyring.set_password(self.base_url, user, password)
+        except PasswordSetError as pe:
+            logging.info("Failed to set_tokens " + self.base_url + " " + self.ws_id)
+            logging.exception(pe)
             logging.error(_("Cannot store tokens in keychain, there might be an OS permission issue!"))
 
-    def get_tokens(self):
-        if not self.tokens:
-            k_tok = keyring.get_password(self.base_url, self.user_id + '-token')
-            if k_tok:
-                parts = k_tok.split(':')
-                self.tokens = {'t': parts[0], 'p': parts[1]}
-        return self.tokens
+    def get_tokens(self, from_keyring=False):
+        k_tok = keyring.get_password(self.base_url, self.user_id + '-token')
+        if k_tok:
+            parts = k_tok.split(':')
+            tokens = {'t': parts[0], 'p': parts[1]}
+            return tokens
+        else:
+            return False
 
     def basic_authenticate(self):
         """
@@ -188,6 +192,9 @@ class PydioSdk():
         users credentials at each requests
         :return:dict()
         """
+        # only authenticate if you're the token latest owner RACE CONDITION of DEATH
+        tokens = self.get_tokens()
+        org_tokens = self.get_tokens()
         url = self.base_url + 'pydio/keystore_generate_auth_token/' + self.device_id
         resp = requests.get(url=url, auth=self.auth, verify=self.verify_ssl, proxies=self.proxies)
         if resp.status_code == 401:
@@ -202,9 +209,11 @@ class PydioSdk():
             tokens = json.loads(resp.content)
         except ValueError as v:
             raise PydioSdkException("basic_auth", "", "Cannot parse JSON result: " + resp.content + "")
-            #return False
-
-        self.set_tokens(tokens)
+        keyring_tokens = self.get_tokens()  # make sure the token wasn't updated during this update
+        if not keyring_tokens or (keyring_tokens['t'] == org_tokens['t'] and keyring_tokens['p'] == org_tokens['p']):
+            self.set_tokens(tokens)
+        else:
+            tokens = keyring_tokens
         return tokens
 
     def perform_basic(self, url, request_type='get', data=None, files=None, headers=None, stream=False, with_progress=False):
@@ -349,7 +358,7 @@ class PydioSdk():
             except requests.exceptions.ConnectionError:
                 raise
             except PydioSdkTokenAuthException as pTok:
-                # Tokens may be revoked? Retry
+                # Token exception -> Authenticate
                 try:
                     tokens = self.basic_authenticate()
                 except PydioSdkTokenAuthNotSupportedException:
@@ -358,12 +367,11 @@ class PydioSdk():
                                  'good for performances, but might be necessary for session credential based setups.')
                     return self.perform_basic(url, request_type=type, data=data, files=files, headers=headers, stream=stream,
                                               with_progress=with_progress)
-
                 try:
                     return self.perform_with_tokens(tokens['t'], tokens['p'], url, type, data, files,
                                                     headers=headers, stream=stream, with_progress=with_progress)
                 except PydioSdkTokenAuthException as secTok:
-                    logging.error('Second Auth Error, what is wrong?')
+                    logging.exception("(2) Token problem " + self.base_url + " " + self.ws_id)
                     raise secTok
 
     def check_basepath(self):
@@ -480,6 +488,8 @@ class PydioSdk():
                 data = json.loads(content)
             except ValueError as ve:
                 logging.exception(ve)
+                if content:
+                    logging.info(content)
                 return False
             logging.debug("data: %s" % data)
             if not data:
@@ -720,11 +730,15 @@ class PydioSdk():
                 #logging.info(json.dumps(data['plugins']['ajxp_plugin'], indent=4))
                 #logging.info(json.dumps(plugins['ajxp_plugin'], indent=4))
                 #if hasattr(plugins, 'ajxp_plugin'):
+                # Get websocket information... #yolo
                 for p in data['plugins']['ajxp_plugin']:
                     try:
                         if p['@id'] == 'core.mq':
                             for prop in p['plugin_configs']['property']:
-                                self.websocket_server_data[prop['@name']] = prop['$'].replace('\\', '').replace('"', '')
+                                if prop['@name'] not in ['BOOSTER_WS_ADVANCED', 'BOOSTER_UPLOAD_ADVANCED']:
+                                    self.websocket_server_data[prop['@name']] = prop['$'].replace('\\', '').replace('"', '')
+                                else:
+                                    self.websocket_server_data[prop['@name']] = json.loads(prop['$'].replace('\\', ''))
                     except KeyError:
                         pass
                 #logging.info(url + " : " + str(self.websocket_server_data))
@@ -733,6 +747,54 @@ class PydioSdk():
         except KeyError as e:
             logging.exception(e)
         return server_data
+
+    def upload_url(self, path):
+        """
+        Generate a signed URI to upload to depending on supported server features
+        :param file_path:
+        :return: the url on which the file should be uploaded to
+        """
+        # TEMPORARILY DISABLE
+        return self.url + '/upload/put' + self.urlencode_normalized((self.remote_folder + os.path.dirname(path)))
+        # BOOSTER_MAIN_SECURE or self.url ?
+        url = None
+        file_path = self.urlencode_normalized(path)
+        try:
+            host, port, prot = None, None, 'http'
+            if 'BOOSTER_UPLOAD_ADVANCED' in self.websocket_server_data and \
+                'UPLOAD_ACTIVE' in self.websocket_server_data and \
+                self.websocket_server_data['UPLOAD_ACTIVE'] == 'true':
+                if 'booster_upload_advanced' in self.websocket_server_data['BOOSTER_UPLOAD_ADVANCED'] and \
+                        self.websocket_server_data['BOOSTER_UPLOAD_ADVANCED']['booster_upload_advanced'] == 'custom':
+                        if 'UPLOAD_HOST' in self.websocket_server_data:
+                            host = self.websocket_server_data['UPLOAD_HOST']
+                        if 'UPLOAD_PORT' in self.websocket_server_data:
+                            port = self.websocket_server_data['UPLOAD_PORT']
+                else:
+                    host = self.websocket_server_data['BOOSTER_MAIN_HOST']
+                    port = self.websocket_server_data['BOOSTER_MAIN_PORT']
+                if 'BOOSTER_MAIN_SECURE' in self.websocket_server_data and \
+                        self.websocket_server_data['BOOSTER_MAIN_SECURE'] == 'true':
+                        prot = 'https'
+                if 'UPLOAD_SECURE' in self.websocket_server_data and \
+                        self.websocket_server_data['UPLOAD_SECURE'] == 'true':
+                        prot = 'https'
+            if self.remote_repo_id is None:
+                self.remote_repo_id = self.get_user_rep()
+            nonce = sha1(str(random.random())).hexdigest()
+            uri = '/api/' + self.remote_repo_id + '/upload/put' + os.path.dirname(file_path)
+            #logging.info("URI: " + uri)
+            tokens = self.get_tokens()
+            msg = uri + ':' + nonce + ':' + tokens['p']
+            the_hash = hmac.new(str(tokens['t']), str(msg), sha256)
+            auth_hash = nonce + ':' + the_hash.hexdigest()
+            mess = 'auth_hash=' + auth_hash + '&auth_token=' + tokens['t']
+            url = prot + "://" + host + ":" + port + "/" + self.websocket_server_data['UPLOAD_PATH'] + '/' + self.remote_repo_id + file_path + '?' + mess
+            #logging.info('UPLOAD TYPE 2')
+        except Exception as e:
+            logging.exception(e)
+            url = self.url + '/upload/put' + self.urlencode_normalized((self.remote_folder + os.path.dirname(path)))
+        return url
 
     def upload_and_hashstat(self, local, local_stat, path, status_handler, callback_dict=None, max_upload_size=-1):
         """
@@ -774,7 +836,7 @@ class PydioSdk():
             folder = self.stat(dirpath)
             if not folder:
                 self.mkdir(os.path.dirname(path))
-        url = self.url + '/upload/put' + self.urlencode_normalized((self.remote_folder + os.path.dirname(path)))
+        url = self.upload_url(path)
         files = {
             'userfile_0': local
         }
@@ -791,7 +853,8 @@ class PydioSdk():
             resp = self.perform_request(url=url, type='post', data=data, files=files, with_progress=callback_dict)
         except PydioSdkDefaultException as e:
             logging.exception(e)
-            logging.info(resp.content)
+            if resp and resp.content:
+                logging.info(resp.content)
             status_handler.update_node_status(path, 'PENDING')
             if e.message == '507':
                 usage, total = self.quota_usage()
@@ -1096,7 +1159,7 @@ class PydioSdk():
 
     def apply_check_hook(self, hook_name='', hook_arg='', file='/'):
         url = self.url + '/apply_check_hook/'+hook_name+'/'+str(hook_arg)+'/'
-        resp = self.perform_request(url=url, type='post', data={'file': self.normalize(file)})
+        resp = self.perform_request(url=url, type='post', data={'file': self.normalize(file).replace('\\', '/')})
         return resp
 
     def quota_usage(self):
@@ -1469,35 +1532,40 @@ class PydioSdk():
         # fetch repo_id
         if self.remote_repo_id is None:
             self.remote_repo_id = self.get_user_rep()
-            """# fetch repo_id from last_seq
-            res = self.changes(last_seq-1)
-            attempt = 0
-            while len(res['changes']) == 0 and attempt < 10: #TODO find a better way to get the repository_identifier
-                attempt += 1
-                res = self.changes(last_seq/2)
-            try:
-                self.remote_repo_id = res['changes'][0]['node']['repository_identifier']
-            except Exception as e:
-                logging.info("Problem fetching repository_identifier for websocket connection")
-                logging.exception(e)
-            #"""
-        try:  # TODO check the right location for WS_ACTIVE
+        host = None
+        port = None
+        ws_server = "ws://"
+        try:
             #logging.info("Server data " + str(self.websocket_server_data))
-            #if "WS_ACTIVE" in self.websocket_server_data:
-             #   if self.websocket_server_data['WS_ACTIVE'] == 'true':
-            ws_server = ""
-            if 'WS_SECURE' in self.websocket_server_data:
-                if self.websocket_server_data['WS_SECURE'] == 'false':
-                    ws_server = "ws://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + "/" + self.websocket_server_data["WS_PATH"]
+            if "BOOSTER_MAIN_HOST" in self.websocket_server_data:
+                host = self.websocket_server_data["BOOSTER_MAIN_HOST"]
+            if "BOOSTER_MAIN_PORT" in self.websocket_server_data:
+                port = self.websocket_server_data["BOOSTER_MAIN_PORT"]
+            if "BOOSTER_WS_ADVANCED" in self.websocket_server_data:
+                booster_ws_advanced = self.websocket_server_data['BOOSTER_WS_ADVANCED']
+                if 'booster_ws_advanced' in booster_ws_advanced and\
+                        booster_ws_advanced['booster_ws_advanced'] == 'custom' and 'WS_HOST' in booster_ws_advanced:
+                    host = booster_ws_advanced['WS_HOST']
+                    if "BOOSTER_MAIN_PORT" in booster_ws_advanced:
+                        port = booster_ws_advanced["BOOSTER_MAIN_PORT"]
+                    if "WS_PORT" in booster_ws_advanced:
+                        port = booster_ws_advanced["WS_PORT"]
+            if "WS_ACTIVE" in self.websocket_server_data:
+                if self.websocket_server_data['WS_ACTIVE'] == 'true':
+                    if 'WS_SECURE' in self.websocket_server_data:
+                        if self.websocket_server_data['WS_SECURE'] == 'true':
+                            ws_server = "wss://"
+                    if 'BOOSTER_MAIN_SECURE' in self.websocket_server_data:
+                        if self.websocket_server_data['BOOSTER_MAIN_SECURE'] == 'true':
+                            ws_server = "wss://"
+                    ws_server += host + ":" + port + "/" + self.websocket_server_data["WS_PATH"]
+                    self.waiter = Waiter(ws_server, self.remote_repo_id, self.get_tokens(), self.ws_id, self.verify_ssl)
+                    self.waiter.start()
                 else:
-                    ws_server = "wss://" + self.websocket_server_data['WS_HOST'] + ":" + self.websocket_server_data['WS_PORT'] + self.websocket_server_data["WS_PATH"]
+                    return False
             else:
+                #logging.info('Websocket server marked inactive.')
                 return False
-            self.waiter = Waiter(ws_server, self.remote_repo_id, self.tokens, self.ws_id)
-            self.waiter.start()
-            #else:
-             #   logging.info('Websocket server marked inactive.')
-              #  return False
         except Exception as e:
             if hasattr(e, "errno") and e.errno == 61:
                 self.failedWebSocketConnection += 1
@@ -1513,9 +1581,12 @@ class PydioSdk():
         self.waiter.ws.close()
 
 class Waiter(threading.Thread):
-    def __init__(self, ws_reg_path, repo_id, tokens, job_id):
+    def __init__(self, ws_reg_path, repo_id, tokens, job_id, verify_ssl=True):
         threading.Thread.__init__(self)
-        self.ws = websocket.WebSocket()
+        if not verify_ssl:
+            self.ws = websocket.WebSocket(sslopt={"cert_reqs": ssl.CERT_NONE})
+        else:
+            self.ws = websocket.WebSocket()
         self.ws_reg_path = ws_reg_path
         self.wait = True
         self.should_fetch_changes = False
@@ -1534,10 +1605,8 @@ class Waiter(threading.Thread):
             the_hash = hmac.new(str(self.tokens['t']), str(msg), sha256)
             auth_hash = nonce + ':' + the_hash.hexdigest()
             mess = "auth_hash=" + auth_hash + '&auth_token=' + self.tokens['t']
+            #logging.info("Connecting to " + self.ws_reg_path + "?" + mess)
             self.ws.connect(self.ws_reg_path + "?" + mess)
-            #logging.info('[ws] Sending auth on WS:// -- ' + mess)
-            #self.ws.send(mess)
-            #logging.info('[ws] Sending register on WS:// -- %r', "register:" + self.repo_id)
             self.ws.send("register:" + self.repo_id)
         except websocket.WebSocketConnectionClosedException:
             self.failedWebSocketConnection += 1
@@ -1545,25 +1614,28 @@ class Waiter(threading.Thread):
             self.should_fetch_changes = True  # Terminate from caller
             return
         except Exception as e:
-            logging.info("[ws] Websocket registration failed")
+            self.failedWebSocketConnection += 1
             logging.exception(e)
+            logging.info("[ws] Websocket registration failed with URL: " + self.ws_reg_path + "?" + mess)
+            logging.info("[ws] payload was: " + "register:" + self.repo_id)
             self.should_fetch_changes = True  # Terminate from caller
             return
 
     def wait_for_changes(self):
-        i = 0
-        if self.failedWebSocketConnection > 10:
+        i = 0  # current number of connection attempts
+        if self.failedWebSocketConnection > 5:
             if self.nextReconnect == 0:
                 # Will wait for 300s, then try to reconnect
-                logging.info("[ws] Disabling websockets, too many failures. ")
+                logging.info("[ws] Disabling websockets, too many failures. " + self.job_id)
                 self.nextReconnect = time.time() + 300
             elif time.time() > self.nextReconnect:
                 self.nextReconnect = 0
-                self.failedWebSocketConnection -= 5
+                self.failedWebSocketConnection -= 2
             return
         while self.wait and i < 2:
-            logging.info("[ws] Waiting for nodes_diff on workspace " + self.job_id)
             try:
+                logging.info("[ws] Waiting for nodes_diff on workspace " + self.job_id)
+                # TODO FIND A WAY TO KILL IT
                 res = self.ws.recv()
                 logging.info("[ws] message received %r [...]", res[:142])
                 #if res.find("nodes_diff") > -1 or res.find('reload') > -1: # parse messages ?
@@ -1571,11 +1643,13 @@ class Waiter(threading.Thread):
                 i = 0
             except websocket.WebSocketConnectionClosedException:
                 i += 1
+                self.failedWebSocketConnection += 1
                 self.register()  # spaghetti, reconnect if for some reason the connection was closed
                 time.sleep(.5)
             except Exception as e:
                 i += 1
-                logging.info("[ws] Failed to receive websocket data")
+                self.failedWebSocketConnection += 1
+                logging.info("[ws] Failed to receive websocket data on workspace " + self.job_id)
                 logging.exception(e)
                 self.should_fetch_changes = True
                 self.register()  # spaghetti, reconnect if for some reason the connection was closed
