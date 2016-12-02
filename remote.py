@@ -1117,7 +1117,8 @@ class PydioSdk():
         try:
             element = ET.ElementTree(ET.fromstring(resp.content)).getroot()
             error = str(element.get('type')).lower() == 'error'
-            message = element[0].text
+            if len(element):
+                message = element[0].text
         except Exception as e:
             logging.exception(e)
             pass
