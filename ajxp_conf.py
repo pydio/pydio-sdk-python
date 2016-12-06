@@ -24,35 +24,35 @@ import xml.etree.ElementTree as ET
 from configs.commons import inner_debug
 
 
-def create_repo(server_def, repo_def):
-    sdk = PydioSdk(server_def['host'], 'ajxp_conf', unicode(''), '', (server_def['user'], server_def['pass']))
-    sdk.stick_to_basic = True
-    import json
-    json_data = json.dumps(repo_def)
-    resp = sdk.perform_request(sdk.url+'/create_repository/'+json_data, 'post')
-    inner_debug(resp.content)
-    queue = [ET.ElementTree(ET.fromstring(resp.content)).getroot()]
-    tree = queue.pop(0)
-    message = tree.findall('message').pop(0)
-    if message.get('type') == 'SUCCESS':
-        reload_node = tree.findall('reload_instruction').pop(0)
-        new_repo_id = reload_node.get('file')
-        if 'META_SOURCES' in repo_def['DRIVER_OPTIONS']:
-            add_meta_sources(new_repo_id, {'add': repo_def['DRIVER_OPTIONS']['META_SOURCES']}, sdk)
-        return new_repo_id
-    else:
-        raise Exception('Error while creating workspace')
+class SettingsSdk(PydioSdk):
 
+    def __init__(self, server_def):
+        PydioSdk.__init__(self, server_def['host'], 'ajxp_conf', unicode(''), '', (server_def['user'], server_def['pass']))
+        self.stick_to_basic = True
 
-def delete_repo(server_def, repo_id):
-    sdk = PydioSdk(server_def['host'], 'ajxp_conf', unicode(''), '', (server_def['user'], server_def['pass']))
-    sdk.stick_to_basic = True
-    resp = sdk.perform_request(sdk.url+'/delete/repository/'+repo_id)
-    inner_debug(resp.content)
+    def create_repo(self, repo_def):
+        import json
+        json_data = json.dumps(repo_def)
+        resp = self.perform_request(self.url+'/create_repository/'+json_data, 'post')
+        inner_debug(resp.content)
+        queue = [ET.ElementTree(ET.fromstring(resp.content)).getroot()]
+        tree = queue.pop(0)
+        message = tree.findall('message').pop(0)
+        if message.get('type') == 'SUCCESS':
+            reload_node = tree.findall('reload_instruction').pop(0)
+            new_repo_id = reload_node.get('file')
+            if 'META_SOURCES' in repo_def['DRIVER_OPTIONS']:
+                self.add_meta_sources(new_repo_id, {'add': repo_def['DRIVER_OPTIONS']['META_SOURCES']})
+            return new_repo_id
+        else:
+            raise Exception('Error while creating workspace')
 
+    def delete_repo(self, repo_id):
+        resp = self.perform_request(self.url+'/delete/repository/'+repo_id)
+        inner_debug(resp.content)
 
-def add_meta_sources(repo_id, metasources, sdk):
-    import json
-    post = {'repository_id': repo_id, 'bulk_data': json.dumps(metasources)}
-    resp = sdk.perform_request(sdk.url + '/edit/meta_source_edit', 'post', post)
-    inner_debug(resp)
+    def add_meta_sources(self, repo_id, metasources):
+        import json
+        post = {'repository_id': repo_id, 'bulk_data': json.dumps(metasources)}
+        resp = self.perform_request(self.url + '/edit/meta_source_edit', 'post', post)
+        inner_debug(resp)
