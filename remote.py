@@ -548,7 +548,7 @@ class PydioSdk():
             data = json.loads(resp.content)
         except ValueError:
             logging.debug("url: %s" % url)
-            logging.debug("resp.content: %s" % resp.content)
+            logging.info("resp.content: %s" % resp.content)
             raise
 
         if len(pathes) == 1:
