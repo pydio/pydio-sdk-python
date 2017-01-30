@@ -1616,6 +1616,7 @@ class Waiter(threading.Thread):
         except Exception as e:
             self.failedWebSocketConnection += 1
             logging.exception(e)
+            logging.info("[SSL]" + ssl.OPENSSL_VERSION)
             logging.info("[ws] Websocket registration failed with URL: " + self.ws_reg_path + "?" + mess)
             logging.info("[ws] payload was: " + "register:" + self.repo_id)
             self.should_fetch_changes = True  # Terminate from caller
