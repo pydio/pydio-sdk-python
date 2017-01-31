@@ -1178,16 +1178,18 @@ class PydioSdk():
         error = False
         message = 'Unknown error'
         try:
-            element = ET.ElementTree(ET.fromstring(resp.content)).getroot()
-            error = str(element.get('type')).lower() == 'error'
-            if len(element):
-                message = element[0].text
+            root = ET.ElementTree(ET.fromstring(resp.content)).getroot()
+            for e in root.getchildren():
+                if e.tag == 'message' and 'type' in e.attrib:
+                    if e.attrib['type'].lower() == 'error':
+                        if len(e.text):
+                            message = e.text
         except Exception as e:
             logging.exception(e)
             pass
         if resp.content.find('ERROR') > -1:
             logging.info(resp.url)
-            logging.info("  " + resp.content)
+            logging.info("  Was this error properly handled? " + resp.content)
         if error:
             raise PydioSdkDefaultException(message)
 
