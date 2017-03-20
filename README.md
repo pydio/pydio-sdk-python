@@ -16,7 +16,7 @@ Python 2
     git submodule update
     virtualenv pydio --python=python2
     source pydio/bin/activate
-    pip -r pydio/requirements.txt
+    pip install -r pydio/requirements.txt
 
 Python 3
 --------
@@ -26,7 +26,7 @@ Python 3
     git submodule update
     virtualenv pydio --python=python3
     source pydio/bin/activate
-    pip -r pydio/requirements.txt
+    pip install -r pydio/requirements.txt
 
 Example usage
 =============
