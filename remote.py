@@ -425,7 +425,7 @@ class PydioSdk():
         resp = self.perform_request(url=url, stream=True)
         info = dict()
         info['max_seq'] = last_seq
-        for line in resp.iter_lines(chunk_size=512):
+        for line in resp.iter_lines(chunk_size=512, delimiter="\n"):
             if line:
                 if str(line).startswith('LAST_SEQ'):
                     #call the merge function with NULL row
@@ -435,12 +435,17 @@ class PydioSdk():
                     try:
                         if platform.system() == "Darwin":
                             line = self.normalize_reverse(line.decode('unicode_escape'))
-                        one_change = json.loads(line)
+                        one_change = json.loads(line, strict=False)
                         node = one_change.pop('node')
                         one_change = dict(node.items() + one_change.items())
                         callback('remote', one_change, info)
 
                     except ValueError as v:
+                        if str(line).count("message type=\"ERROR\""):
+                            import re
+                            # Remove XML tags
+                            text = re.sub('<[^<]+>', '', line.decode('unicode_escape'))
+                            raise PydioSdkDefaultException(text)
                         logging.error('Invalid JSON Response, line was ' + str(line))
                         raise Exception(_('Invalid JSON value received while getting remote changes'))
                     except Exception as e:
@@ -485,7 +490,7 @@ class PydioSdk():
                 content = resp.content
                 if platform.system() == "Darwin":
                     content = self.normalize_reverse(content.decode('unicode_escape'))
-                data = json.loads(content)
+                data = json.loads(content, strict=False)
             except ValueError as ve:
                 logging.exception(ve)
                 if content:
@@ -545,7 +550,7 @@ class PydioSdk():
 
         try:
             # Possible Composed, Decomposed utf-8 is handled later...
-            data = json.loads(resp.content)
+            data = json.loads(resp.content, strict=False)
         except ValueError:
             logging.debug("url: %s" % url)
             logging.info("resp.content: %s" % resp.content)
@@ -1147,7 +1152,7 @@ class PydioSdk():
         files = dict()
         for line in resp.iter_lines(chunk_size=512):
             if not str(line).startswith('LAST_SEQ'):
-                element = json.loads(line)
+                element = json.loads(line, strict=False)
                 if call_back:
                     call_back(element)
                 else:
