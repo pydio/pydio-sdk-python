@@ -1195,6 +1195,7 @@ class PydioSdk():
         if resp.content.find('ERROR') > -1:
             logging.info(resp.url)
             logging.info("  Was this error properly handled? " + resp.content)
+            error=True
         if error:
             raise PydioSdkDefaultException(message)
 
