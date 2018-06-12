@@ -31,6 +31,8 @@ import math
 import threading
 import websocket
 import ssl
+import boto3
+from boto3.s3.transfer import TransferConfig
 from requests.exceptions import ConnectionError, RequestException
 import keyring
 from keyring.errors import PasswordSetError
@@ -110,6 +112,9 @@ class PydioSdk():
         self.remote_repo_id = None
         self.websocket_server_data = {}
         self.waiter = None
+        self.jwtNotSupported = False
+        self.jwt = None
+        self.jwtExpiration = None
 
     def set_server_configs(self, configs):
         """
@@ -438,6 +443,8 @@ class PydioSdk():
                         one_change = json.loads(line, strict=False)
                         node = one_change.pop('node')
                         one_change = dict(node.items() + one_change.items())
+                        if not one_change.has_key('target') or not one_change.has_key('source'):
+                            continue
                         callback('remote', one_change, info)
 
                     except ValueError as v:
@@ -635,7 +642,9 @@ class PydioSdk():
             url = self.url + '/mkfile' + self.urlencode_normalized((self.remote_folder + path)) + '?force=true'
             resp = self.perform_request(url=url)
             self.is_pydio_error_response(resp)
-        return resp.content
+        if resp and resp.content:
+            return resp.content
+        return ''
 
     def rename(self, source, target):
         """
@@ -847,9 +856,11 @@ class PydioSdk():
         }
         if existing_part:
             files['existing_dlpart'] = existing_part
+
         data = {
             'force_post': 'true',
             'xhr_uploader': 'true',
+            'normalized_path': self.normalize(self.remote_folder + path),
             'urlencoded_filename': self.urlencode_normalized(os.path.basename(path))
         }
         resp = None
@@ -912,6 +923,7 @@ class PydioSdk():
         data = {
             'force_post': 'true',
             'xhr_uploader': 'true',
+            'normalized_path': self.normalize(self.remote_folder + path),
             'urlencoded_filename': self.urlencode_normalized(os.path.basename(path))
         }
         try:
@@ -939,6 +951,18 @@ class PydioSdk():
         orig = self.stat(path)
         if not orig:
             raise PydioSdkException('download', path, _('Original file was not found on server'), 1404)
+
+        jwt = self.get_jwt()
+        if jwt is not None:
+            def cb(progress=0, delta=0, rate=0):
+                if callback_dict:
+                    callback_dict['bytes_sent'] = float(delta)
+                    callback_dict['total_bytes_sent'] = float(progress)
+                    callback_dict['total_size'] = float(orig['size'])
+                    callback_dict['transfer_rate'] = 0
+                    dispatcher.send(signal=TRANSFER_CALLBACK_SIGNAL,sender=self,change=callback_dict)
+            resp = self.download_with_jwt(jwt, self.normalize(self.remote_folder + path), orig['size'], local, cb)
+            return resp
 
         url = self.url + '/download' + self.urlencode_normalized((self.remote_folder + path))
         local_tmp = local + '.pydio_dl'
@@ -1224,7 +1248,6 @@ class PydioSdk():
     def is_rsync_supported(self):
         return self.rsync_supported
 
-
     def upload_file_with_progress(self, url, fields, files, stream, with_progress, max_size=0, auth=None):
         """
         Upload a file with progress, file chunking if necessary, and stream content directly from file.
@@ -1278,6 +1301,13 @@ class PydioSdk():
                 raise PydioSdkException('upload', files['userfile_0'], _('Local file to upload not found!'))
             else:
                 raise e
+
+        jwt = self.get_jwt()
+        if jwt is not None:
+            remote = fields['normalized_path']
+            resp = self.upload_with_jwt(jwt, files['userfile_0'], self.ws_id + '/' + remote.strip('/'), cb)
+            return resp
+
         if max_size:
             # Reduce max size to leave some room for data header
             max_size -= 4096
@@ -1361,6 +1391,100 @@ class PydioSdk():
                 logging.info('Uploaded '+str(max_size)+' bytes of data in about %'+str(duration)+' s')
 
         return resp
+
+    def get_jwt(self):
+
+        if self.jwtNotSupported:
+            return None
+
+        if self.jwt is not None and not self.jwt_needs_refresh():
+            return self.jwt
+
+        try:
+            resp = self.perform_request(url=self.base_url+'pydio/jwt?client_time=' + str(int(time.time())),type='get')
+            if resp.status_code == 404 or 'Could not find action' in resp.content:
+                self.jwtNotSupported = True
+                return None
+            parsed = json.loads(resp.content)
+            if parsed and parsed['jwt']:
+                self.jwt = parsed['jwt']
+                self.jwtExpiration = int(parsed['expirationTime'])
+                return self.jwt
+        except Exception as e:
+            logging.error('JWT not available')
+            pass
+        return None
+
+    def jwt_needs_refresh(self):
+        return self.jwtExpiration - time.time() < 60 * 5
+
+    def upload_with_jwt(self, jwt, local_file, remote_path, cb):
+        MB = 1024 ** 2
+        config = TransferConfig(multipart_threshold=20 * MB, io_chunksize= 10 * MB, max_concurrency=5)
+        client = boto3.client(
+            service_name='s3',
+            endpoint_url=self.base_url.replace('/api/', ''),
+            verify=self.verify_ssl,
+            aws_access_key_id=jwt,
+            aws_secret_access_key='gatewaysecret',
+        )
+
+        stat = os.stat(local_file)
+        size = stat.st_size
+        total = [0]
+
+        def s3cb(transferred):
+            total[0] += transferred
+            cb(size=size, progress=total[0], delta=transferred)
+
+        bucket = 'io'
+        key = remote_path
+        try:
+            client.upload_file(local_file, bucket, key, Callback=s3cb, Config=config)
+        except Exception as e:
+            raise PydioSdkDefaultException(e.message)
+
+        class MockResponse:
+            def __init__(self):
+                self.status_code = 200
+        return MockResponse()
+
+    def download_with_jwt(self, jwt, remote_path, remote_size, local_file, cb):
+        local_tmp = local_file + '.pydio_dl'
+        client = boto3.client(
+            service_name='s3',
+            endpoint_url=self.base_url.replace('/api/', ''),
+            verify=self.verify_ssl,
+            aws_access_key_id=jwt,
+            aws_secret_access_key='gatewaysecret',
+        )
+
+        total = [0]
+
+        def s3cb(transferred):
+            total[0] += transferred
+            cb(progress=total[0], delta=transferred)
+
+        bucket = 'io'
+        key = self.ws_id + '/' + remote_path.strip('/')
+        try:
+            client.download_file(Filename=local_tmp, Bucket=bucket, Key=key)
+        except Exception as e:
+            raise PydioSdkDefaultException(e.message)
+
+        if not os.path.exists(local_tmp):
+            raise PydioSdkException('download', local_file, _('File not found after download'))
+        else:
+            stat_result = os.stat(local_tmp)
+            if not remote_size == stat_result.st_size:
+                os.unlink(local_tmp)
+                raise PydioSdkException('download', remote_path, _('File is not correct after download'))
+            else:
+                is_system_windows = platform.system().lower().startswith('win')
+                if is_system_windows and os.path.exists(local_file):
+                    os.unlink(local_file)
+                os.rename(local_tmp, local_file)
+        return True
 
     def check_share_link(self, file_name):
         """ Check if a share link exists for a given item (filename)
