@@ -1407,6 +1407,9 @@ class PydioSdk():
                 return None
             parsed = json.loads(resp.content)
             if parsed and parsed['jwt']:
+                if not parsed['s3Key']:
+                    self.jwtNotSupported = True
+                    return
                 self.jwt = parsed['jwt']
                 self.jwtExpiration = int(parsed['expirationTime'])
                 return self.jwt
