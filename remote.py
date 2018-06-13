@@ -112,6 +112,8 @@ class PydioSdk():
         self.remote_repo_id = None
         self.websocket_server_data = {}
         self.waiter = None
+
+        self.s3client = None
         self.jwtNotSupported = False
         self.jwt = None
         self.jwtExpiration = None
@@ -503,7 +505,7 @@ class PydioSdk():
                 if content:
                     logging.info(content)
                 return False
-            logging.debug("data: %s" % data)
+            #logging.debug("data: %s" % data)
             if not data:
                 return False
             if len(data) > 0 and 'size' in data:
@@ -952,8 +954,8 @@ class PydioSdk():
         if not orig:
             raise PydioSdkException('download', path, _('Original file was not found on server'), 1404)
 
-        jwt = self.get_jwt()
-        if jwt is not None:
+        s3client = self.get_client()
+        if s3client is not None:
             def cb(progress=0, delta=0, rate=0):
                 if callback_dict:
                     callback_dict['bytes_sent'] = float(delta)
@@ -961,7 +963,7 @@ class PydioSdk():
                     callback_dict['total_size'] = float(orig['size'])
                     callback_dict['transfer_rate'] = 0
                     dispatcher.send(signal=TRANSFER_CALLBACK_SIGNAL,sender=self,change=callback_dict)
-            resp = self.download_with_jwt(jwt, self.normalize(self.remote_folder + path), orig['size'], local, cb)
+            resp = self.download_with_s3(s3client, self.normalize(self.remote_folder + path), orig['size'], local, cb)
             return resp
 
         url = self.url + '/download' + self.urlencode_normalized((self.remote_folder + path))
@@ -1302,10 +1304,10 @@ class PydioSdk():
             else:
                 raise e
 
-        jwt = self.get_jwt()
-        if jwt is not None:
+        s3client = self.get_client()
+        if s3client is not None:
             remote = fields['normalized_path']
-            resp = self.upload_with_jwt(jwt, files['userfile_0'], self.ws_id + '/' + remote.strip('/'), cb)
+            resp = self.upload_with_s3(s3client, files['userfile_0'], self.ws_id + '/' + remote.strip('/'), cb)
             return resp
 
         if max_size:
@@ -1392,13 +1394,13 @@ class PydioSdk():
 
         return resp
 
-    def get_jwt(self):
+    def get_client(self):
 
         if self.jwtNotSupported:
             return None
 
-        if self.jwt is not None and not self.jwt_needs_refresh():
-            return self.jwt
+        if self.s3client is not None and not self.jwt_needs_refresh():
+            return self.s3client
 
         try:
             resp = self.perform_request(url=self.base_url+'pydio/jwt?client_time=' + str(int(time.time())),type='get')
@@ -1409,10 +1411,17 @@ class PydioSdk():
             if parsed and parsed['jwt']:
                 if not parsed['s3Key']:
                     self.jwtNotSupported = True
-                    return
+                    return None
                 self.jwt = parsed['jwt']
                 self.jwtExpiration = int(parsed['expirationTime'])
-                return self.jwt
+                self.s3client = boto3.client(
+                    service_name='s3',
+                    endpoint_url=self.base_url.replace('/api/', ''),
+                    verify=self.verify_ssl,
+                    aws_access_key_id=self.jwt,
+                    aws_secret_access_key='gatewaysecret',
+                )
+                return self.s3client
         except Exception as e:
             logging.error('JWT not available')
             pass
@@ -1421,17 +1430,10 @@ class PydioSdk():
     def jwt_needs_refresh(self):
         return self.jwtExpiration - time.time() < 60 * 5
 
-    def upload_with_jwt(self, jwt, local_file, remote_path, cb):
+    def upload_with_s3(self, client, local_file, remote_path, cb):
         logging.info('Uploading ' + local_file + ' using s3 protocol and JWT')
         MB = 1024 ** 2
         config = TransferConfig(multipart_threshold=20 * MB, io_chunksize= 10 * MB, max_concurrency=5)
-        client = boto3.client(
-            service_name='s3',
-            endpoint_url=self.base_url.replace('/api/', ''),
-            verify=self.verify_ssl,
-            aws_access_key_id=jwt,
-            aws_secret_access_key='gatewaysecret',
-        )
 
         stat = os.stat(local_file)
         size = stat.st_size
@@ -1453,17 +1455,12 @@ class PydioSdk():
                 self.status_code = 200
         return MockResponse()
 
-    def download_with_jwt(self, jwt, remote_path, remote_size, local_file, cb):
+    def download_with_s3(self, client, remote_path, remote_size, local_file, cb):
         logging.info('Downloading ' + remote_path + ' using s3 protocol and JWT')
-        local_tmp = local_file + '.pydio_dl'
-        client = boto3.client(
-            service_name='s3',
-            endpoint_url=self.base_url.replace('/api/', ''),
-            verify=self.verify_ssl,
-            aws_access_key_id=jwt,
-            aws_secret_access_key='gatewaysecret',
-        )
+        if not os.path.exists(os.path.dirname(local_file)):
+            os.makedirs(os.path.dirname(local_file))
 
+        local_tmp = local_file + '.pydio_dl'
         total = [0]
 
         def s3cb(transferred):
