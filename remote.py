@@ -1442,7 +1442,7 @@ class PydioSdk():
             cb(size=size, progress=total[0], delta=transferred)
 
         bucket = 'io'
-        key = remote_path
+        key = remote_path.replace("\\", "/").strip('/')
         try:
             client.upload_file(local_file, bucket, key, Callback=s3cb, Config=config)
         except Exception as e:
@@ -1471,7 +1471,7 @@ class PydioSdk():
             cb(progress=total[0], delta=transferred)
 
         bucket = 'io'
-        key = self.ws_id + '/' + remote_path.strip('/')
+        key = self.ws_id + '/' + remote_path.replace("\\", "/").strip('/')
         try:
             client.download_file(Filename=local_tmp, Bucket=bucket, Key=key)
         except Exception as e:
