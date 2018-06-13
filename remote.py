@@ -1419,6 +1419,7 @@ class PydioSdk():
         return self.jwtExpiration - time.time() < 60 * 5
 
     def upload_with_jwt(self, jwt, local_file, remote_path, cb):
+        logging.info('Uploading ' + str(local_file) + ' using s3 protocol and JWT')
         MB = 1024 ** 2
         config = TransferConfig(multipart_threshold=20 * MB, io_chunksize= 10 * MB, max_concurrency=5)
         client = boto3.client(
@@ -1450,6 +1451,7 @@ class PydioSdk():
         return MockResponse()
 
     def download_with_jwt(self, jwt, remote_path, remote_size, local_file, cb):
+        logging.info('Downloading ' + str(remote_path) + ' using s3 protocol and JWT')
         local_tmp = local_file + '.pydio_dl'
         client = boto3.client(
             service_name='s3',
