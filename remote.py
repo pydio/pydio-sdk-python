@@ -885,13 +885,16 @@ class PydioSdk():
             status_handler.update_node_status(path, 'PENDING')
             raise PydioSdkException("upload", str(path), 'RequestException: ' + str(ce))
 
-        new = self.stat(path)
-        if not new or not (new['size'] == local_stat['size']):
-            status_handler.update_node_status(path, 'PENDING')
-            beginning_filename = path.rfind('/')
-            if beginning_filename > -1 and path[beginning_filename+1] == " ":
-                raise PydioSdkException('upload', path, _("File beginning with a 'space' shouldn't be uploaded"))
-            raise PydioSdkException('upload', path, _('File is incorrect after upload'))
+        # If upload was done via s3, the stat is probably not correct yet (time for sync on the backend)
+        # So we ignore this step
+        if self.jwt is None:
+            new = self.stat(path)
+            if not new or not (new['size'] == local_stat['size']):
+                status_handler.update_node_status(path, 'PENDING')
+                beginning_filename = path.rfind('/')
+                if beginning_filename > -1 and path[beginning_filename+1] == " ":
+                    raise PydioSdkException('upload', path, _("File beginning with a 'space' shouldn't be uploaded"))
+                raise PydioSdkException('upload', path, _('File is incorrect after upload'))
         return True
 
     def upload(self, local, local_stat, path, callback_dict=None, max_upload_size=-1):
