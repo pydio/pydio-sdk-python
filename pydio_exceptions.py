@@ -62,6 +62,13 @@ class PydioSdkTokenAuthNotSupportedException(Exception):
     def __init__(self, type):
         super(PydioSdkTokenAuthNotSupportedException, self).__init__(_('Token-based authentication seems unsupported, this may impact performances?'))
 
+class PydioSdkForbiddenCharactersException(Exception):
+    def __init__(self, pathes):
+        super(PydioSdkForbiddenCharactersException, self).__init__('sdk operation')
+        if pathes is None:
+            pathes = []
+        self.pathes = pathes
+
 class PydioSdkDefaultException(Exception):
     def __init__(self, message):
         super(PydioSdkDefaultException, self).__init__(message)

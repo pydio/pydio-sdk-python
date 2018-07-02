@@ -27,6 +27,7 @@ import hashlib
 from io import BytesIO, FileIO
 from six import b
 from pydispatch import dispatcher
+from lxml import etree
 try:
     from pydio import TRANSFER_RATE_SIGNAL, TRANSFER_CALLBACK_SIGNAL
 except ImportError:
@@ -159,6 +160,25 @@ def encode_multiparts(fields, basic_auth=None):
 
     return (header_body.getvalue(), closing_boundary, content_type)
 
+def is_file_not_found_response(resp):
+    content_type = resp.headers["content-type"]
+    if "text/xml" in content_type:
+        tree = etree.fromstring(resp.content)
+        msg = tree.xpath("/tree/message")[0]
+        msg_type = msg.get("type").lower()
+        return msg is not None and msg_type == "error" and "cannot find file" in msg.text.lower()
+    return False
+
+def is_forbidden_characters_response(resp):
+    content_type = resp.headers["content-type"]
+    if "text/xml" in content_type:
+        tree = etree.fromstring(resp.content)
+        msg = tree.xpath("/tree/message")[0]
+        msg_type = msg.get("type").lower()
+        return msg is not None and msg_type == "error" and "contains forbidden characters" in msg.text
+
+    return False
+
 
 def file_start_hash_match(local_file, size, remote_hash):
     md5 = hashlib.md5()
@@ -186,3 +206,6 @@ except NameError:
             hasher.update(buf)
             buf = afile.read(blocksize)
         return hasher.hexdigest()
+
+
+

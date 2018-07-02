@@ -36,9 +36,10 @@ from boto3.s3.transfer import TransferConfig
 from requests.exceptions import ConnectionError, RequestException
 import keyring
 from keyring.errors import PasswordSetError
+from util import is_file_not_found_response, is_forbidden_characters_response
 import xml.etree.ElementTree as ET
 from pydio_exceptions import PydioSdkException, PydioSdkBasicAuthException, PydioSdkTokenAuthException, \
-    PydioSdkQuotaException, PydioSdkPermissionException, PydioSdkTokenAuthNotSupportedException, PydioSdkDefaultException
+    PydioSdkQuotaException, PydioSdkPermissionException, PydioSdkTokenAuthNotSupportedException, PydioSdkDefaultException, PydioSdkForbiddenCharactersException
 from util import *
 try:
     from pydio.utils.functions import hashfile
@@ -408,6 +409,10 @@ class PydioSdk():
                 return json.loads(self.normalize_reverse(resp.content.decode('unicode_escape')))
             else:
                 return json.loads(self.normalize(resp.content.decode('unicode_escape')))
+
+        except PydioSdkForbiddenCharactersException as fc:
+            raise fc
+
         except ValueError as v:
             logging.exception(v)
             raise Exception(_("Invalid JSON value received while getting remote changes. Is the server correctly configured?"))
@@ -430,6 +435,9 @@ class PydioSdk():
         url += '&flatten=' + perform_flattening
 
         resp = self.perform_request(url=url, stream=True)
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=[self.remote_folder])
+
         info = dict()
         info['max_seq'] = last_seq
         for line in resp.iter_lines(chunk_size=512, delimiter="\n"):
@@ -495,6 +503,10 @@ class PydioSdk():
                 resp = self.perform_request(url, headers=h)
             else:
                 resp = self.perform_request(url)
+
+            if is_forbidden_characters_response(resp):
+                return False
+
             try:
                 content = resp.content
                 if platform.system() == "Darwin":
@@ -516,12 +528,14 @@ class PydioSdk():
             logging.error("Connection Error " + str(ce))
         except requests.exceptions.Timeout as ce:
             logging.error("Timeout Error " + str(ce))
+        except PydioSdkForbiddenCharactersException as e:
+            raise e
         except Exception, ex:
             logging.exception(ex)
             logging.warning("Stat failed", exc_info=ex)
         return False
 
-    def bulk_stat(self, pathes, result=None, with_hash=False):
+    def bulk_stat(self, pathes, result=None, with_hash=False, invalid_pathes=[]):
         """
         Perform a stat operation (see self.stat()) but on a set of nodes. Very important to use that method instead
         of sending tons of small stat requests to server. To keep POST content reasonable, pathes will be sent 200 by
@@ -532,6 +546,7 @@ class PydioSdk():
         :param with_hash: bool whether to ask for files hash or not (md5)
         :return:
         """
+
         if self.interrupt_tasks:
             raise PydioSdkException("stat", path=pathes[0], detail=_('Task interrupted by user'))
 
@@ -557,22 +572,44 @@ class PydioSdk():
             logging.info('Reduce bulk stat slice number to %d', self.stat_slice_number)
             return self.bulk_stat(pathes, result=result, with_hash=with_hash)
 
-        try:
-            # Possible Composed, Decomposed utf-8 is handled later...
-            data = json.loads(resp.content, strict=False)
-        except ValueError:
-            logging.debug("url: %s" % url)
-            logging.info("resp.content: %s" % resp.content)
-            raise
+        if is_forbidden_characters_response(resp):
+            valid_pathes = dict()
+            indexes = list()
+            index = -1
+            for p in pathes:
+                index += 1
+                st = self.stat(path=p, with_hash=with_hash)
+                if st:
+                    valid_pathes[p] = st
+                else:
+                    indexes.append(index)
+                    invalid_pathes.append(p)
 
-        if len(pathes) == 1:
+            for i in reversed(indexes):
+                del pathes[i]
+
+            data = valid_pathes
+
+            #raise PydioSdkForbiddenCharactersException(pathes=[self.remote_folder])
+        else:
+            try:
+                # Possible Composed, Decomposed utf-8 is handled later...
+                data = json.loads(resp.content, strict=False)
+            except ValueError:
+                logging.debug("url: %s" % url)
+                logging.info("resp.content: %s" % resp.content)
+                raise
+
+        if len(pathes) == 1 and len(data) > 0:
             englob = dict()
             englob[self.remote_folder + pathes[0]] = data
             data = englob
+
         if result:
             replaced = result
         else:
             replaced = dict()
+
         for (p, stat) in data.items():
             if self.remote_folder:
                 p = p[len(self.remote_folder):]
@@ -610,6 +647,8 @@ class PydioSdk():
         """
         url = self.url + '/mkdir' + self.urlencode_normalized((self.remote_folder + path))
         resp = self.perform_request(url=url)
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=[path])
         self.is_pydio_error_response(resp)
         return resp.content
 
@@ -624,6 +663,8 @@ class PydioSdk():
         data['nodes[]'] = map(lambda t: self.normalize(self.remote_folder + t), filter(lambda x: x != '', pathes))
         url = self.url + '/mkdir' + self.urlencode_normalized(self.remote_folder + pathes[0])
         resp = self.perform_request(url=url, type='post', data=data)
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=pathes)
         self.is_pydio_error_response(resp)
         return resp.content
 
@@ -644,6 +685,10 @@ class PydioSdk():
             url = self.url + '/mkfile' + self.urlencode_normalized((self.remote_folder + path)) + '?force=true'
             resp = self.perform_request(url=url)
             self.is_pydio_error_response(resp)
+
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=[path])
+
         if resp and resp.content:
             return resp.content
         return ''
@@ -680,6 +725,10 @@ class PydioSdk():
             self.is_pydio_error_response(resp2)
             return resp1.content + resp2.content
         resp = self.perform_request(url=url, type='post', data=data)
+
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException()
+
         self.is_pydio_error_response(resp)
         return resp.content
 
@@ -711,6 +760,12 @@ class PydioSdk():
         url = self.url + '/delete' + self.urlencode_normalized((self.remote_folder + path))
         data = dict(file=self.normalize(self.remote_folder + path).encode('utf-8'))
         resp = self.perform_request(url=url, type='post', data=data)
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=[path])
+
+        if is_file_not_found_response(resp):
+            return "{}"
+
         self.is_pydio_error_response(resp)
         return resp.content
 
@@ -870,15 +925,19 @@ class PydioSdk():
         try:
             resp = self.perform_request(url=url, type='post', data=data, files=files, with_progress=callback_dict)
         except PydioSdkDefaultException as e:
-            logging.exception(e)
             if resp and resp.content:
                 logging.info(resp.content)
             status_handler.update_node_status(path, 'PENDING')
             if e.message == '507':
                 usage, total = self.quota_usage()
                 raise PydioSdkQuotaException(path, local_stat['size'], usage, total)
+
             if e.message == '412':
                 raise PydioSdkPermissionException('Cannot upload '+os.path.basename(path)+' in directory '+os.path.dirname(path))
+
+            if "contains forbidden characters" in e.message:
+                raise PydioSdkForbiddenCharactersException(pathes=[path])
+
             else:
                 raise e
         except RequestException as ce:
@@ -1574,7 +1633,6 @@ class PydioSdk():
         #logging.info(resp.content)
         self.is_pydio_error_response(resp)
         return resp.content
-
 
     def unshare(self, path):
         """ Sends un-share request for the specified item and returns the server response
