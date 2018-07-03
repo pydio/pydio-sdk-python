@@ -635,8 +635,10 @@ class PydioSdk():
                 logging.info('Fatal charset error, cannot find files (%s, %s, %s, %s) in %s' % (repr(p1), repr(p2), repr(p3), repr(p4), repr(pathes),))
                 raise PydioSdkException('bulk_stat', p1, "Encoding problem, failed emptying bulk_stat, "
                                                          "exiting to avoid infinite loop")
-        if len(pathes):
-            self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
+
+        # TODO: check effect of commented two lines below
+        #if len(pathes):
+        #   self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
         return replaced
 
     def mkdir(self, path):
