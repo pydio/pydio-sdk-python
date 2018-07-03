@@ -18,7 +18,6 @@
 #  The latest code can be found at <http://pyd.io/>.
 #
 
-
 import urllib
 import json
 import hmac
@@ -35,13 +34,12 @@ import ssl
 import boto3
 from boto3.s3.transfer import TransferConfig
 from requests.exceptions import ConnectionError, RequestException
-from lxml import etree
-
 import keyring
 from keyring.errors import PasswordSetError
+from util import is_file_not_found_response, is_forbidden_characters_response
 import xml.etree.ElementTree as ET
 from pydio_exceptions import PydioSdkException, PydioSdkBasicAuthException, PydioSdkTokenAuthException, \
-    PydioSdkQuotaException, PydioSdkPermissionException, PydioSdkTokenAuthNotSupportedException, PydioSdkDefaultException
+    PydioSdkQuotaException, PydioSdkPermissionException, PydioSdkTokenAuthNotSupportedException, PydioSdkDefaultException, PydioSdkForbiddenCharactersException
 from util import *
 try:
     from pydio.utils.functions import hashfile
@@ -115,6 +113,8 @@ class PydioSdk():
         self.remote_repo_id = None
         self.websocket_server_data = {}
         self.waiter = None
+
+        self.s3client = None
         self.jwtNotSupported = False
         self.jwt = None
         self.jwtExpiration = None
@@ -409,6 +409,10 @@ class PydioSdk():
                 return json.loads(self.normalize_reverse(resp.content.decode('unicode_escape')))
             else:
                 return json.loads(self.normalize(resp.content.decode('unicode_escape')))
+
+        except PydioSdkForbiddenCharactersException as fc:
+            raise fc
+
         except ValueError as v:
             logging.exception(v)
             raise Exception(_("Invalid JSON value received while getting remote changes. Is the server correctly configured?"))
@@ -431,6 +435,9 @@ class PydioSdk():
         url += '&flatten=' + perform_flattening
 
         resp = self.perform_request(url=url, stream=True)
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=[self.remote_folder])
+
         info = dict()
         info['max_seq'] = last_seq
         for line in resp.iter_lines(chunk_size=512, delimiter="\n"):
@@ -496,6 +503,10 @@ class PydioSdk():
                 resp = self.perform_request(url, headers=h)
             else:
                 resp = self.perform_request(url)
+
+            if is_forbidden_characters_response(resp):
+                return False
+
             try:
                 content = resp.content
                 if platform.system() == "Darwin":
@@ -506,7 +517,7 @@ class PydioSdk():
                 if content:
                     logging.info(content)
                 return False
-            logging.debug("data: %s" % data)
+            #logging.debug("data: %s" % data)
             if not data:
                 return False
             if len(data) > 0 and 'size' in data:
@@ -517,12 +528,14 @@ class PydioSdk():
             logging.error("Connection Error " + str(ce))
         except requests.exceptions.Timeout as ce:
             logging.error("Timeout Error " + str(ce))
+        except PydioSdkForbiddenCharactersException as e:
+            raise e
         except Exception, ex:
             logging.exception(ex)
             logging.warning("Stat failed", exc_info=ex)
         return False
 
-    def bulk_stat(self, pathes, result=None, with_hash=False):
+    def bulk_stat(self, pathes, result=None, with_hash=False, invalid_pathes=[]):
         """
         Perform a stat operation (see self.stat()) but on a set of nodes. Very important to use that method instead
         of sending tons of small stat requests to server. To keep POST content reasonable, pathes will be sent 200 by
@@ -533,6 +546,7 @@ class PydioSdk():
         :param with_hash: bool whether to ask for files hash or not (md5)
         :return:
         """
+
         if self.interrupt_tasks:
             raise PydioSdkException("stat", path=pathes[0], detail=_('Task interrupted by user'))
 
@@ -558,26 +572,44 @@ class PydioSdk():
             logging.info('Reduce bulk stat slice number to %d', self.stat_slice_number)
             return self.bulk_stat(pathes, result=result, with_hash=with_hash)
 
-        content = resp.content
-        try:
-            # Possible Composed, Decomposed utf-8 is handled later...
-            data = json.loads(resp.content, strict=False)
-        except ValueError:
-            tree = etree.fromstring(text=content)
-            tree.xpath("/")
-            logging.info("bulk stats response => %s" % content)
-            logging.info("resp.content: %s" % resp.content)
-            logging.debug("url: %s" % url)
-            raise
+        if is_forbidden_characters_response(resp):
+            valid_pathes = dict()
+            indexes = list()
+            index = -1
+            for p in pathes:
+                index += 1
+                st = self.stat(path=p, with_hash=with_hash)
+                if st:
+                    valid_pathes[p] = st
+                else:
+                    indexes.append(index)
+                    invalid_pathes.append(p)
 
-        if len(pathes) == 1:
+            for i in reversed(indexes):
+                del pathes[i]
+
+            data = valid_pathes
+
+            #raise PydioSdkForbiddenCharactersException(pathes=[self.remote_folder])
+        else:
+            try:
+                # Possible Composed, Decomposed utf-8 is handled later...
+                data = json.loads(resp.content, strict=False)
+            except ValueError:
+                logging.debug("url: %s" % url)
+                logging.info("resp.content: %s" % resp.content)
+                raise
+
+        if len(pathes) == 1 and len(data) > 0:
             englob = dict()
             englob[self.remote_folder + pathes[0]] = data
             data = englob
+
         if result:
             replaced = result
         else:
             replaced = dict()
+
         for (p, stat) in data.items():
             if self.remote_folder:
                 p = p[len(self.remote_folder):]
@@ -603,8 +635,10 @@ class PydioSdk():
                 logging.info('Fatal charset error, cannot find files (%s, %s, %s, %s) in %s' % (repr(p1), repr(p2), repr(p3), repr(p4), repr(pathes),))
                 raise PydioSdkException('bulk_stat', p1, "Encoding problem, failed emptying bulk_stat, "
                                                          "exiting to avoid infinite loop")
-        if len(pathes):
-            self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
+
+        # TODO: check effect of commented two lines below
+        #if len(pathes):
+        #   self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
         return replaced
 
     def mkdir(self, path):
@@ -615,6 +649,8 @@ class PydioSdk():
         """
         url = self.url + '/mkdir' + self.urlencode_normalized((self.remote_folder + path))
         resp = self.perform_request(url=url)
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=[path])
         self.is_pydio_error_response(resp)
         return resp.content
 
@@ -629,6 +665,8 @@ class PydioSdk():
         data['nodes[]'] = map(lambda t: self.normalize(self.remote_folder + t), filter(lambda x: x != '', pathes))
         url = self.url + '/mkdir' + self.urlencode_normalized(self.remote_folder + pathes[0])
         resp = self.perform_request(url=url, type='post', data=data)
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=pathes)
         self.is_pydio_error_response(resp)
         return resp.content
 
@@ -649,6 +687,10 @@ class PydioSdk():
             url = self.url + '/mkfile' + self.urlencode_normalized((self.remote_folder + path)) + '?force=true'
             resp = self.perform_request(url=url)
             self.is_pydio_error_response(resp)
+
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=[path])
+
         if resp and resp.content:
             return resp.content
         return ''
@@ -685,6 +727,10 @@ class PydioSdk():
             self.is_pydio_error_response(resp2)
             return resp1.content + resp2.content
         resp = self.perform_request(url=url, type='post', data=data)
+
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException()
+
         self.is_pydio_error_response(resp)
         return resp.content
 
@@ -716,6 +762,12 @@ class PydioSdk():
         url = self.url + '/delete' + self.urlencode_normalized((self.remote_folder + path))
         data = dict(file=self.normalize(self.remote_folder + path).encode('utf-8'))
         resp = self.perform_request(url=url, type='post', data=data)
+        if is_forbidden_characters_response(resp):
+            raise PydioSdkForbiddenCharactersException(pathes=[path])
+
+        if is_file_not_found_response(resp):
+            return "{}"
+
         self.is_pydio_error_response(resp)
         return resp.content
 
@@ -875,30 +927,35 @@ class PydioSdk():
         try:
             resp = self.perform_request(url=url, type='post', data=data, files=files, with_progress=callback_dict)
         except PydioSdkDefaultException as e:
-            logging.exception(e)
             if resp and resp.content:
                 logging.info(resp.content)
             status_handler.update_node_status(path, 'PENDING')
             if e.message == '507':
                 usage, total = self.quota_usage()
                 raise PydioSdkQuotaException(path, local_stat['size'], usage, total)
+
             if e.message == '412':
                 raise PydioSdkPermissionException('Cannot upload '+os.path.basename(path)+' in directory '+os.path.dirname(path))
-            if "(411)" in e.message:
-                return True
+
+            if "contains forbidden characters" in e.message:
+                raise PydioSdkForbiddenCharactersException(pathes=[path])
+
             else:
                 raise e
         except RequestException as ce:
             status_handler.update_node_status(path, 'PENDING')
             raise PydioSdkException("upload", str(path), 'RequestException: ' + str(ce))
 
-        new = self.stat(path)
-        if not new or not (new['size'] == local_stat['size']):
-            status_handler.update_node_status(path, 'PENDING')
-            beginning_filename = path.rfind('/')
-            if beginning_filename > -1 and path[beginning_filename+1] == " ":
-                raise PydioSdkException('upload', path, _("File beginning with a 'space' shouldn't be uploaded"))
-            raise PydioSdkException('upload', path, _('File is incorrect after upload'))
+        # If upload was done via s3, the stat is probably not correct yet (time for sync on the backend)
+        # So we ignore this step
+        if self.jwt is None:
+            new = self.stat(path)
+            if not new or not (new['size'] == local_stat['size']):
+                status_handler.update_node_status(path, 'PENDING')
+                beginning_filename = path.rfind('/')
+                if beginning_filename > -1 and path[beginning_filename+1] == " ":
+                    raise PydioSdkException('upload', path, _("File beginning with a 'space' shouldn't be uploaded"))
+                raise PydioSdkException('upload', path, _('File is incorrect after upload'))
         return True
 
     def upload(self, local, local_stat, path, callback_dict=None, max_upload_size=-1):
@@ -961,8 +1018,8 @@ class PydioSdk():
         if not orig:
             raise PydioSdkException('download', path, _('Original file was not found on server'), 1404)
 
-        jwt = self.get_jwt()
-        if jwt is not None:
+        s3client = self.get_client()
+        if s3client is not None:
             def cb(progress=0, delta=0, rate=0):
                 if callback_dict:
                     callback_dict['bytes_sent'] = float(delta)
@@ -970,7 +1027,7 @@ class PydioSdk():
                     callback_dict['total_size'] = float(orig['size'])
                     callback_dict['transfer_rate'] = 0
                     dispatcher.send(signal=TRANSFER_CALLBACK_SIGNAL,sender=self,change=callback_dict)
-            resp = self.download_with_jwt(jwt, self.normalize(self.remote_folder + path), orig['size'], local, cb)
+            resp = self.download_with_s3(s3client, self.normalize(self.remote_folder + path), orig['size'], local, cb)
             return resp
 
         url = self.url + '/download' + self.urlencode_normalized((self.remote_folder + path))
@@ -1311,10 +1368,10 @@ class PydioSdk():
             else:
                 raise e
 
-        jwt = self.get_jwt()
-        if jwt is not None:
+        s3client = self.get_client()
+        if s3client is not None:
             remote = fields['normalized_path']
-            resp = self.upload_with_jwt(jwt, files['userfile_0'], self.ws_id + '/' + remote.strip('/\\'), cb)
+            resp = self.upload_with_s3(s3client, files['userfile_0'], self.ws_id + '/' + remote.strip('/'), cb)
             return resp
 
         if max_size:
@@ -1401,13 +1458,13 @@ class PydioSdk():
 
         return resp
 
-    def get_jwt(self):
+    def get_client(self):
 
         if self.jwtNotSupported:
             return None
 
-        if self.jwt is not None and not self.jwt_needs_refresh():
-            return self.jwt
+        if self.s3client is not None and not self.jwt_needs_refresh():
+            return self.s3client
 
         try:
             resp = self.perform_request(url=self.base_url+'pydio/jwt?client_time=' + str(int(time.time())),type='get')
@@ -1418,10 +1475,17 @@ class PydioSdk():
             if parsed and parsed['jwt']:
                 if not parsed['s3Key']:
                     self.jwtNotSupported = True
-                    return
+                    return None
                 self.jwt = parsed['jwt']
                 self.jwtExpiration = int(parsed['expirationTime'])
-                return self.jwt
+                self.s3client = boto3.client(
+                    service_name='s3',
+                    endpoint_url=self.base_url.replace('/api/', ''),
+                    verify=self.verify_ssl,
+                    aws_access_key_id=self.jwt,
+                    aws_secret_access_key='gatewaysecret',
+                )
+                return self.s3client
         except Exception as e:
             logging.error('JWT not available')
             pass
@@ -1430,17 +1494,10 @@ class PydioSdk():
     def jwt_needs_refresh(self):
         return self.jwtExpiration - time.time() < 60 * 5
 
-    def upload_with_jwt(self, jwt, local_file, remote_path, cb):
+    def upload_with_s3(self, client, local_file, remote_path, cb):
         logging.info('Uploading ' + local_file + ' using s3 protocol and JWT')
         MB = 1024 ** 2
         config = TransferConfig(multipart_threshold=20 * MB, io_chunksize= 10 * MB, max_concurrency=5)
-        client = boto3.client(
-            service_name='s3',
-            endpoint_url=self.base_url.replace('/api/', ''),
-            verify=self.verify_ssl,
-            aws_access_key_id=jwt,
-            aws_secret_access_key='gatewaysecret',
-        )
 
         stat = os.stat(local_file)
         size = stat.st_size
@@ -1462,17 +1519,12 @@ class PydioSdk():
                 self.status_code = 200
         return MockResponse()
 
-    def download_with_jwt(self, jwt, remote_path, remote_size, local_file, cb):
+    def download_with_s3(self, client, remote_path, remote_size, local_file, cb):
         logging.info('Downloading ' + remote_path + ' using s3 protocol and JWT')
-        local_tmp = local_file + '.pydio_dl'
-        client = boto3.client(
-            service_name='s3',
-            endpoint_url=self.base_url.replace('/api/', ''),
-            verify=self.verify_ssl,
-            aws_access_key_id=jwt,
-            aws_secret_access_key='gatewaysecret',
-        )
+        if not os.path.exists(os.path.dirname(local_file)):
+            os.makedirs(os.path.dirname(local_file))
 
+        local_tmp = local_file + '.pydio_dl'
         total = [0]
 
         def s3cb(transferred):
@@ -1583,7 +1635,6 @@ class PydioSdk():
         #logging.info(resp.content)
         self.is_pydio_error_response(resp)
         return resp.content
-
 
     def unshare(self, path):
         """ Sends un-share request for the specified item and returns the server response
@@ -1761,7 +1812,7 @@ class Waiter(threading.Thread):
             return
         except Exception as e:
             self.failedWebSocketConnection += 1
-            #logging.exception(e)
+            logging.exception(e)
             logging.info("[SSL]" + ssl.OPENSSL_VERSION)
             logging.info("[ws] Websocket registration failed with URL: " + self.ws_reg_path + "?" + mess)
             logging.info("[ws] payload was: " + "register:" + self.repo_id)
