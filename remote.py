@@ -36,17 +36,18 @@ from boto3.s3.transfer import TransferConfig
 from requests.exceptions import ConnectionError, RequestException
 import keyring
 from keyring.errors import PasswordSetError
-from util import is_file_not_found_response, is_forbidden_characters_response
 import xml.etree.ElementTree as ET
 from pydio_exceptions import PydioSdkException, PydioSdkBasicAuthException, PydioSdkTokenAuthException, \
     PydioSdkQuotaException, PydioSdkPermissionException, PydioSdkTokenAuthNotSupportedException, PydioSdkDefaultException, PydioSdkForbiddenCharactersException
 from util import *
 try:
+    from pydio.sdkremote.util import is_file_not_found_response, is_forbidden_characters_response
     from pydio.utils.functions import hashfile
     from pydio import TRANSFER_RATE_SIGNAL, TRANSFER_CALLBACK_SIGNAL
     from pydio.utils import i18n
     _ = i18n.language.ugettext
 except ImportError:
+    from sdkremote.util import is_file_not_found_response, is_forbidden_characters_response
     try:
         from utils.functions import hashfile
         from utils import i18n
