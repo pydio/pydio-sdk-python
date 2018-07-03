@@ -18,6 +18,7 @@
 #  The latest code can be found at <http://pyd.io/>.
 #
 
+
 import urllib
 import json
 import hmac
@@ -34,6 +35,8 @@ import ssl
 import boto3
 from boto3.s3.transfer import TransferConfig
 from requests.exceptions import ConnectionError, RequestException
+from lxml import etree
+
 import keyring
 from keyring.errors import PasswordSetError
 import xml.etree.ElementTree as ET
@@ -555,12 +558,16 @@ class PydioSdk():
             logging.info('Reduce bulk stat slice number to %d', self.stat_slice_number)
             return self.bulk_stat(pathes, result=result, with_hash=with_hash)
 
+        content = resp.content
         try:
             # Possible Composed, Decomposed utf-8 is handled later...
             data = json.loads(resp.content, strict=False)
         except ValueError:
-            logging.debug("url: %s" % url)
+            tree = etree.fromstring(text=content)
+            tree.xpath("/")
+            logging.info("bulk stats response => %s" % content)
             logging.info("resp.content: %s" % resp.content)
+            logging.debug("url: %s" % url)
             raise
 
         if len(pathes) == 1:
@@ -877,6 +884,8 @@ class PydioSdk():
                 raise PydioSdkQuotaException(path, local_stat['size'], usage, total)
             if e.message == '412':
                 raise PydioSdkPermissionException('Cannot upload '+os.path.basename(path)+' in directory '+os.path.dirname(path))
+            if "(411)" in e.message:
+                return True
             else:
                 raise e
         except RequestException as ce:
@@ -1305,7 +1314,7 @@ class PydioSdk():
         jwt = self.get_jwt()
         if jwt is not None:
             remote = fields['normalized_path']
-            resp = self.upload_with_jwt(jwt, files['userfile_0'], self.ws_id + '/' + remote.strip('/'), cb)
+            resp = self.upload_with_jwt(jwt, files['userfile_0'], self.ws_id + '/' + remote.strip('/\\'), cb)
             return resp
 
         if max_size:
@@ -1752,7 +1761,7 @@ class Waiter(threading.Thread):
             return
         except Exception as e:
             self.failedWebSocketConnection += 1
-            logging.exception(e)
+            #logging.exception(e)
             logging.info("[SSL]" + ssl.OPENSSL_VERSION)
             logging.info("[ws] Websocket registration failed with URL: " + self.ws_reg_path + "?" + mess)
             logging.info("[ws] payload was: " + "register:" + self.repo_id)
