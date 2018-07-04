@@ -20,10 +20,12 @@
 
 try:
     from pydio.utils import i18n
+
     _ = i18n.language.ugettext
 except ImportError:
     try:
         from utils import i18n
+
         _ = i18n.language.ugettext
     except ImportError:
         pass
@@ -33,9 +35,10 @@ except NameError:
     def _(message):
         return message
 
+
 class ProcessException(Exception):
     def __init__(self, src, operation, path, detail):
-        super(ProcessException, self).__init__('['+src+'] [' + operation + '] ' + path + ' ('+detail+')')
+        super(ProcessException, self).__init__('[' + src + '] [' + operation + '] ' + path + ' (' + detail + ')')
         self.src_path = path
         self.operation = operation
         self.detail = detail
@@ -46,21 +49,27 @@ class PydioSdkException(ProcessException):
         super(PydioSdkException, self).__init__('sdk operation', operation, path, detail)
         self.code = code
 
+
 class SystemSdkException(ProcessException):
     def __init__(self, operation, path, detail):
         super(SystemSdkException, self).__init__('system operation', operation, path, detail)
+
 
 class PydioSdkBasicAuthException(Exception):
     def __init__(self, type):
         super(PydioSdkBasicAuthException, self).__init__(_('Http-Basic authentication failed, wrong credentials?'))
 
+
 class PydioSdkTokenAuthException(Exception):
     def __init__(self, type):
         super(PydioSdkTokenAuthException, self).__init__(_('Token-based authentication failed, reload credentials?'))
 
+
 class PydioSdkTokenAuthNotSupportedException(Exception):
     def __init__(self, type):
-        super(PydioSdkTokenAuthNotSupportedException, self).__init__(_('Token-based authentication seems unsupported, this may impact performances?'))
+        super(PydioSdkTokenAuthNotSupportedException, self).__init__(
+            _('Token-based authentication seems unsupported, this may impact performances?'))
+
 
 class PydioSdkForbiddenCharactersException(Exception):
     def __init__(self, pathes):
@@ -69,22 +78,29 @@ class PydioSdkForbiddenCharactersException(Exception):
             pathes = []
         self.pathes = pathes
 
+
 class PydioSdkDefaultException(Exception):
     def __init__(self, message):
         super(PydioSdkDefaultException, self).__init__(message)
 
+
 class PydioSdkQuotaException(PydioSdkDefaultException):
     def __init__(self, file_name, file_size, usage, total):
         def to_mo(value):
-            return format(float(value)/(1024*1024))
+            return format(float(value) / (1024 * 1024))
+
         super(PydioSdkQuotaException, self).__init__(
-            _('[Quota limit reached] - You are using %(usage)s iMB of %(total)s iMB, you cannot upload %(filename)s %(filesize)s iMB')
-            % {'usage':to_mo(usage), 'total':to_mo(total), 'filename':file_name, 'filesize':to_mo(file_size)})
+            _(
+                '[Quota limit reached] - You are using %(usage)s iMB of %(total)s iMB, you cannot upload %(filename)s %(filesize)s iMB')
+            % {'usage': to_mo(usage), 'total': to_mo(total), 'filename': file_name, 'filesize': to_mo(file_size)})
         self.code = 507
+
+
 class PydioSdkPermissionException(PydioSdkDefaultException):
     def __init__(self, message):
         super(PydioSdkDefaultException, self).__init__(_('[File permission] %s') % message)
         self.code = 412
+
 
 class InterruptException(Exception):
     def __init__(self):

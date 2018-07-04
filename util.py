@@ -25,6 +25,8 @@ import os
 import sys
 import hashlib
 from io import BytesIO, FileIO
+
+import xmltodict
 from six import b
 from pydispatch import dispatcher
 try:
