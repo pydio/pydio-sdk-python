@@ -636,9 +636,8 @@ class PydioSdk():
                 raise PydioSdkException('bulk_stat', p1, "Encoding problem, failed emptying bulk_stat, "
                                                          "exiting to avoid infinite loop")
 
-        # TODO: check effect of commented two lines below
-        #if len(pathes):
-        #   self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
+        if len(pathes):
+           self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
         return replaced
 
     def mkdir(self, path):
