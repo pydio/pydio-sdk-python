@@ -432,7 +432,7 @@ class PydioSdk():
         url = self.url + '/changes/' + str(last_seq) + '/?stream=true'
         if self.remote_folder:
             url += '&filter=' + self.remote_folder
-        url += '&changes=' + perform_flattening
+        url += '&flatten=' + perform_flattening
 
         resp = self.perform_request(url=url, stream=True)
         if is_forbidden_characters_response(resp):
@@ -557,9 +557,8 @@ class PydioSdk():
 
         action = '/stat_hash' if with_hash else '/stat'
 
-        maxlen = min(len(pathes), self.stat_slice_number)
-
         while len(pathes) > 0:
+            maxlen = min(len(pathes), self.stat_slice_number)
             if platform.system() == "Darwin":
                 clean_pathes = map(lambda t: self.remote_folder + t.replace('\\', '/').replace("//", "/"), filter(lambda x: self.normalize_reverse(x) != '', pathes[:maxlen]))
             else:
@@ -643,7 +642,7 @@ class PydioSdk():
                                                              "exiting to avoid infinite loop")
 
         #if len(pathes):
-           #self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
+        #self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
         return replaced
 
     def mkdir(self, path):
@@ -1240,7 +1239,7 @@ class PydioSdk():
         return snapshot if not call_back else None
 
     def snapshot_from_changes(self, call_back=None):
-        url = self.url + '/changes/0/?stream=true&changes=true'
+        url = self.url + '/changes/0/?stream=true&flatten=true'
         if self.remote_folder:
             url += '&filter=' + self.urlencode_normalized(self.remote_folder)
         resp = self.perform_request(url=url, stream=True)
