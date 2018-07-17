@@ -432,7 +432,7 @@ class PydioSdk():
         url = self.url + '/changes/' + str(last_seq) + '/?stream=true'
         if self.remote_folder:
             url += '&filter=' + self.remote_folder
-        url += '&flatten=' + perform_flattening
+        url += '&changes=' + perform_flattening
 
         resp = self.perform_request(url=url, stream=True)
         if is_forbidden_characters_response(resp):
@@ -451,6 +451,7 @@ class PydioSdk():
                         if platform.system() == "Darwin":
                             line = self.normalize_reverse(line.decode('unicode_escape'))
                         one_change = json.loads(line, strict=False)
+
                         node = one_change.pop('node')
                         one_change = dict(node.items() + one_change.items())
                         if not one_change.has_key('target') or not one_change.has_key('source'):
@@ -552,92 +553,97 @@ class PydioSdk():
 
         from requests.exceptions import Timeout
         # NORMALIZE PATHES FROM START
-        pathes = map(lambda p: self.normalize(p), pathes)
+        pathes = map(lambda p: self.normalize(p).replace("//", "/"), pathes)
 
         action = '/stat_hash' if with_hash else '/stat'
-        data = dict()
+
         maxlen = min(len(pathes), self.stat_slice_number)
-        if platform.system() == "Darwin":
-            clean_pathes = map(lambda t: self.remote_folder + t.replace('\\', '/'), filter(lambda x: self.normalize_reverse(x) != '', pathes[:maxlen]))
-        else:
-            clean_pathes = map(lambda t: self.remote_folder + t.replace('\\', '/'), filter(lambda x: x != '', pathes[:maxlen]))
-        data['nodes[]'] = map(lambda p: self.normalize(p), clean_pathes)
-        url = self.url + action + self.urlencode_normalized(clean_pathes[0])
-        try:
-            resp = self.perform_request(url, type='post', data=data)
-        except Timeout:
-            if self.stat_slice_number < 20:
-                raise
-            self.stat_slice_number = int(math.floor(self.stat_slice_number / 2))
-            logging.info('Reduce bulk stat slice number to %d', self.stat_slice_number)
-            return self.bulk_stat(pathes, result=result, with_hash=with_hash)
 
-        if is_forbidden_characters_response(resp):
-            valid_pathes = dict()
-            indexes = list()
-            index = -1
-            for p in pathes:
-                index += 1
-                st = self.stat(path=p, with_hash=with_hash)
-                if st:
-                    valid_pathes[p] = st
-                else:
-                    indexes.append(index)
-                    invalid_pathes.append(p)
-
-            for i in reversed(indexes):
-                del pathes[i]
-
-            data = valid_pathes
-
-            #raise PydioSdkForbiddenCharactersException(pathes=[self.remote_folder])
-        else:
-            try:
-                # Possible Composed, Decomposed utf-8 is handled later...
-                data = json.loads(resp.content, strict=False)
-            except ValueError:
-                logging.debug("url: %s" % url)
-                logging.info("resp.content: %s" % resp.content)
-                raise
-
-        if len(pathes) == 1 and len(data) > 0:
-            englob = dict()
-            englob[self.remote_folder + pathes[0]] = data
-            data = englob
-
-        if result:
-            replaced = result
-        else:
-            replaced = dict()
-
-        for (p, stat) in data.items():
-            if self.remote_folder:
-                p = p[len(self.remote_folder):]
-                #replaced[os.path.normpath(p)] = stat
-            p1 = os.path.normpath(p)
-            p2 = os.path.normpath(self.normalize_reverse(p))
-            p3 = p
-            p4 = self.normalize_reverse(p)
-            if p2 in pathes:
-                replaced[p2] = stat
-                pathes.remove(p2)
-            elif p1 in pathes:
-                replaced[p1] = stat
-                pathes.remove(p1)
-            elif p3 in pathes:
-                replaced[p3] = stat
-                pathes.remove(p3)
-            elif p4 in pathes:
-                replaced[p4] = stat
-                pathes.remove(p4)
+        while len(pathes) > 0:
+            if platform.system() == "Darwin":
+                clean_pathes = map(lambda t: self.remote_folder + t.replace('\\', '/').replace("//", "/"), filter(lambda x: self.normalize_reverse(x) != '', pathes[:maxlen]))
             else:
-                #pass
-                logging.info('Fatal charset error, cannot find files (%s, %s, %s, %s) in %s' % (repr(p1), repr(p2), repr(p3), repr(p4), repr(pathes),))
-                raise PydioSdkException('bulk_stat', p1, "Encoding problem, failed emptying bulk_stat, "
-                                                         "exiting to avoid infinite loop")
+                clean_pathes = map(lambda t: self.remote_folder + t.replace('\\', '/').replace("//", "/"), filter(lambda x: x != '', pathes[:maxlen]))
 
-        if len(pathes):
-           self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
+            data = dict()
+            data['nodes[]'] = map(lambda p: self.normalize(p), clean_pathes)
+
+            if len(clean_pathes) == 0:
+                break
+
+            #url = self.url + action + self.urlencode_normalized(clean_pathes[0])
+            url = self.url + action + "/"
+            try:
+                resp = self.perform_request(url, type='post', data=data)
+            except Timeout:
+                if self.stat_slice_number < 20:
+                    raise
+                self.stat_slice_number = int(math.floor(self.stat_slice_number / 2))
+                logging.info('Reduce bulk stat slice number to %d', self.stat_slice_number)
+                #return self.bulk_stat(pathes, result=result, with_hash=with_hash)
+                continue
+
+            else:
+                try:
+                    # Possible Composed, Decomposed utf-8 is handled later...
+                    data = json.loads(resp.content, strict=False)
+                except ValueError:
+                    valid_pathes = dict()
+                    indexes = list()
+                    index = -1
+                    for p in pathes:
+                        index += 1
+                        st = self.stat(path=p, with_hash=with_hash)
+                        if st:
+                            valid_pathes[p] = st
+                        else:
+                            indexes.append(index)
+                            invalid_pathes.append(p)
+
+                    for i in reversed(indexes):
+                        del pathes[i]
+
+                    data = valid_pathes
+
+            if len(clean_pathes) == 1 and (len(data) > 0 or len(data.keys()) == 0):
+                englob = dict()
+                englob[self.remote_folder + pathes[0]] = data
+                data = englob
+
+
+            if result:
+                replaced = result
+            else:
+                replaced = dict()
+
+            for (p, stat) in data.items():
+                if self.remote_folder:
+                    p = p[len(self.remote_folder):]
+                    #replaced[os.path.normpath(p)] = stat
+                p1 = os.path.normpath(p)
+                p2 = os.path.normpath(self.normalize_reverse(p))
+                p3 = p
+                p4 = self.normalize_reverse(p)
+                if p2 in pathes:
+                    replaced[p2] = stat
+                    pathes.remove(p2)
+                elif p1 in pathes:
+                    replaced[p1] = stat
+                    pathes.remove(p1)
+                elif p3 in pathes:
+                    replaced[p3] = stat
+                    pathes.remove(p3)
+                elif p4 in pathes:
+                    replaced[p4] = stat
+                    pathes.remove(p4)
+                else:
+                    #pass
+                    logging.info('Fatal charset error, cannot find files (%s, %s, %s, %s) in %s' % (repr(p1), repr(p2), repr(p3), repr(p4), repr(pathes),))
+                    raise PydioSdkException('bulk_stat', p1, "Encoding problem, failed emptying bulk_stat, "
+                                                             "exiting to avoid infinite loop")
+
+        #if len(pathes):
+           #self.bulk_stat(pathes, result=replaced, with_hash=with_hash)
         return replaced
 
     def mkdir(self, path):
@@ -1234,7 +1240,7 @@ class PydioSdk():
         return snapshot if not call_back else None
 
     def snapshot_from_changes(self, call_back=None):
-        url = self.url + '/changes/0/?stream=true&flatten=true'
+        url = self.url + '/changes/0/?stream=true&changes=true'
         if self.remote_folder:
             url += '&filter=' + self.urlencode_normalized(self.remote_folder)
         resp = self.perform_request(url=url, stream=True)
